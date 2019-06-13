@@ -191,7 +191,8 @@ func main() {
 		log.Println("Disabling lock..")
 		pf.DisableLock()
 		log.Println("Done")
-	} else if flagPrintLockRulesAndExit {
+	} 
+	if flagPrintLockRulesAndExit {
 		pf.PrintLockRules()
 	}
 }
