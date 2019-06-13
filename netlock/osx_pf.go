@@ -45,13 +45,13 @@ type PF struct {
 
 
 func (pf *PF) EnableLock() {
-	pf.lazyInit()
+	pf.preconfig()
 	pf.loadConf(pf.makeLockConf())
 }
 
 
 func (pf *PF) DisableLock() {
-	pf.lazyInit()
+	pf.preconfig()
 	pf.loadConf(pf.defaultConfPath)
 }
 
@@ -136,7 +136,7 @@ func (pf *PF) makeLockConf() string {
 }
 
 
-func (pf *PF) lazyInit() {
+func (pf *PF) preconfig() {
 	ctlPath, err := exec.LookPath("pfctl")
 	if err != nil {
 		log.Fatal(err)
