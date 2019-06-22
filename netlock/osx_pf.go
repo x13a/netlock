@@ -57,7 +57,7 @@ func (pf *PF) DisableLock() {
 
 
 func (pf *PF) PrintLockRules() {
-	fmt.Print(pf.makeLockRules())
+	fmt.Println(pf.makeLockRules())
 }
 
 
@@ -68,11 +68,15 @@ func (pf *PF) isEnabled() bool {
 
 func (pf *PF) makeLockRules() string {
 	rules := "set block-policy return\n"
-	interfaces := ""
+	interfaces := "lo0"
 	if len(pf.interfaces) > 0 {
-		interfaces = strings.Join(pf.interfaces, " ")
+		interfaces = fmt.Sprintf(
+			"%s %s", 
+			interfaces, 
+			strings.Join(pf.interfaces, " "),
+		)
 	}
-	rules += fmt.Sprintf("set skip on { lo0 %s }\n", interfaces)
+	rules += fmt.Sprintf("set skip on { %s }\n", interfaces)
 	rules += "scrub in all\n"
 	if pf.allowIncoming {
 		rules += "pass in all\n"

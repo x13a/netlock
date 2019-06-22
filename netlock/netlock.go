@@ -183,6 +183,9 @@ func main() {
 		flagIPs,
 		flagInterfaces,
 	)
+	if flagPrintLockRulesAndExit {
+		pf.PrintLockRules()
+	}
 	if flagEnableLock {
 		log.Println("Enabling lock..")
 		pf.EnableLock()
@@ -192,7 +195,4 @@ func main() {
 		pf.DisableLock()
 		log.Println("Done")
 	} 
-	if flagPrintLockRulesAndExit {
-		pf.PrintLockRules()
-	}
 }
