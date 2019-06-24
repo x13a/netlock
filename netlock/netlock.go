@@ -1,41 +1,38 @@
 package main
 
 import (
-	"fmt"
+	"bufio"
+	"errors"
 	"flag"
+	"fmt"
 	"log"
+	"net"
 	"os"
 	"strings"
-	"net"
-	"errors"
-	"bufio"
 )
 
 const stringsDone = "OK"
 
-
 type (
-	flagIPsType []string
+	flagIPsType   []string
 	flagSliceType []string
 	flagHostsType []string
 	flagFilesType []string
 )
 
-
 var (
-	flagEnableLock bool
-	flagDisableLock bool
-	flagAllowIncoming bool
-	flagAllowOutgoing bool
-	flagAllowPrivateNetwork bool
-	flagAllowICMP bool
-	flagIPs flagIPsType
-	flagInterfaces flagSliceType
-	flagHosts flagHostsType
-	flagFiles flagFilesType
+	flagEnableLock            bool
+	flagDisableLock           bool
+	flagAllowIncoming         bool
+	flagAllowOutgoing         bool
+	flagAllowPrivateNetwork   bool
+	flagAllowICMP             bool
+	flagIPs                   flagIPsType
+	flagInterfaces            flagSliceType
+	flagHosts                 flagHostsType
+	flagFiles                 flagFilesType
 	flagPrintLockRulesAndExit bool
 )
-
 
 func addIP(ip string) error {
 	if addr := net.ParseIP(ip); addr != nil {
@@ -44,7 +41,6 @@ func addIP(ip string) error {
 	}
 	return errors.New("Invalid ip")
 }
-
 
 func addHostIPs(host string) error {
 	addrs, err := net.LookupIP(host)
@@ -57,42 +53,34 @@ func addHostIPs(host string) error {
 	return nil
 }
 
-
 func (s *flagIPsType) String() string {
 	return fmt.Sprint(*s)
 }
-
 
 func (s *flagIPsType) Set(val string) error {
 	return addIP(val)
 }
 
-
 func (s *flagSliceType) String() string {
 	return fmt.Sprint(*s)
 }
-
 
 func (s *flagSliceType) Set(val string) error {
 	*s = append(*s, val)
 	return nil
 }
 
-
 func (s *flagHostsType) String() string {
 	return fmt.Sprint(*s)
 }
-
 
 func (s *flagHostsType) Set(val string) error {
 	return addHostIPs(val)
 }
 
-
 func (s *flagFilesType) String() string {
 	return fmt.Sprint(*s)
 }
-
 
 func (s *flagFilesType) Set(val string) error {
 	file, err := os.Open(val)
@@ -124,14 +112,13 @@ func (s *flagFilesType) Set(val string) error {
 	return nil
 }
 
-
 func parseArgs() {
 	flag.BoolVar(&flagEnableLock, "e", false, "Enable lock")
 	flag.BoolVar(&flagDisableLock, "d", false, "Disable lock")
 	flag.BoolVar(
-		&flagAllowIncoming, 
+		&flagAllowIncoming,
 		"allow-incoming",
-		false, 
+		false,
 		"Allow incoming connections outside vpn",
 	)
 	flag.BoolVar(
@@ -152,29 +139,26 @@ func parseArgs() {
 	flag.Var(&flagHosts, "host", "Add ips resolving host")
 	flag.Var(&flagFiles, "file", "Add ips reading .ovpn file")
 	flag.BoolVar(
-		&flagPrintLockRulesAndExit, 
-		"print", 
-		false, 
+		&flagPrintLockRulesAndExit,
+		"print",
+		false,
 		"Print lock rules and exit",
 	)
 	flag.Parse()
 }
 
-
 func init() {
 	parseArgs()
 	if flagEnableLock && flagDisableLock {
 		log.Fatal("Enable and disable are mutually exclusive")
-	} else if
-		!flagEnableLock && 
-		!flagDisableLock && 
+	} else if !flagEnableLock &&
+		!flagDisableLock &&
 		!flagPrintLockRulesAndExit {
 
 		flag.PrintDefaults()
 		os.Exit(64)
 	}
 }
-
 
 func main() {
 	pf := NewPF(
@@ -194,5 +178,5 @@ func main() {
 	} else if flagDisableLock {
 		pf.DisableLock()
 		log.Println(stringsDone)
-	} 
+	}
 }

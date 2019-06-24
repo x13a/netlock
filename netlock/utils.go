@@ -3,11 +3,10 @@ package main
 import (
 	"log"
 	"os"
-	"os/user"
 	"os/exec"
+	"os/user"
 	"strings"
 )
-
 
 func execCombinedOutput(filepath string, args ...string) string {
 	out, err := exec.Command(filepath, args...).CombinedOutput()
@@ -18,7 +17,6 @@ func execCombinedOutput(filepath string, args ...string) string {
 	return string(out)
 }
 
-
 func split(s string) []string {
 	var results []string
 	for _, v := range strings.Split(s, " ") {
@@ -28,7 +26,6 @@ func split(s string) []string {
 	}
 	return results
 }
-
 
 func isRoot() bool {
 	cuser, err := user.Current()

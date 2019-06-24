@@ -1,78 +1,71 @@
 package main
 
 import (
-	"strings"
 	"fmt"
-	"log"
 	"io/ioutil"
+	"log"
 	"os/exec"
+	"strings"
 )
 
 const defaultConfPath = "/etc/pf.conf"
 
-
 func NewPF(
 	allowIncoming bool,
 	allowOutgoing bool,
-	allowPrivateNetwork bool, 
-	allowICMP bool, 
-	ips []string, 
+	allowPrivateNetwork bool,
+	allowICMP bool,
+	ips []string,
 	interfaces []string,
 ) *PF {
 	pf := &PF{
-		defaultConfPath: defaultConfPath,
-		allowIncoming: allowIncoming,
-		allowOutgoing: allowOutgoing,
-		allowICMP: allowICMP,
+		defaultConfPath:     defaultConfPath,
+		allowIncoming:       allowIncoming,
+		allowOutgoing:       allowOutgoing,
+		allowICMP:           allowICMP,
 		allowPrivateNetwork: allowPrivateNetwork,
-		ips: ips,
-		interfaces: interfaces,
+		ips:                 ips,
+		interfaces:          interfaces,
 	}
 	return pf
 }
 
-
 type PF struct {
-	ctlPath string
-	defaultConfPath string
-	allowIncoming bool
-	allowOutgoing bool
+	ctlPath             string
+	defaultConfPath     string
+	allowIncoming       bool
+	allowOutgoing       bool
 	allowPrivateNetwork bool
-	allowICMP bool
-	ips []string
-	interfaces []string
+	allowICMP           bool
+	ips                 []string
+	interfaces          []string
 }
-
 
 func (pf *PF) EnableLock() {
 	pf.preconfig()
 	pf.loadConf(pf.makeLockConf())
 }
 
-
 func (pf *PF) DisableLock() {
 	pf.preconfig()
 	pf.loadConf(pf.defaultConfPath)
 }
 
-
 func (pf *PF) PrintLockRules() {
-	log.Println(pf.makeLockRules())
+	fmt.Println(pf.makeLockRules())
 }
-
 
 func (pf *PF) isEnabled() bool {
 	return strings.Contains(pf.exec("-si"), "Status: Enabled")
 }
-
 
 func (pf *PF) makeLockRules() string {
 	rules := "set block-policy return\n"
 	interfaces := "lo0"
 	if len(pf.interfaces) > 0 {
 		interfaces = fmt.Sprintf(
-			"%s %s", 
-			interfaces, 
+			"%s %s",
+			interfaces,
 			strings.Join(pf.interfaces, " "),
 		)
 	}
@@ -124,7 +117,6 @@ func (pf *PF) makeLockRules() string {
 	return rules
 }
 
-
 func (pf *PF) makeLockConf() string {
 	tmpfile, err := ioutil.TempFile("", "netlock.*.conf")
 	if err != nil {
@@ -138,7 +130,6 @@ func (pf *PF) makeLockConf() string {
 	}
 	return tmpfile.Name()
 }
-
 
 func (pf *PF) preconfig() {
 	ctlPath, err := exec.LookPath("pfctl")
@@ -154,11 +145,9 @@ func (pf *PF) preconfig() {
 	}
 }
 
-
 func (pf *PF) loadConf(confPath string) {
 	pf.exec("-f", confPath)
 }
-
 
 func (pf *PF) exec(args ...string) string {
 	return execCombinedOutput(pf.ctlPath, args...)
