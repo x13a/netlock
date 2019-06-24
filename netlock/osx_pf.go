@@ -57,7 +57,7 @@ func (pf *PF) DisableLock() {
 
 
 func (pf *PF) PrintLockRules() {
-	fmt.Println(pf.makeLockRules())
+	log.Println(pf.makeLockRules())
 }
 
 

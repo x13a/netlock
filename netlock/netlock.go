@@ -11,6 +11,8 @@ import (
 	"bufio"
 )
 
+const stringsDone = "OK"
+
 
 type (
 	flagIPsType []string
@@ -187,12 +189,10 @@ func main() {
 		pf.PrintLockRules()
 	}
 	if flagEnableLock {
-		log.Println("Enabling lock..")
 		pf.EnableLock()
-		log.Println("Done")
+		log.Println(stringsDone)
 	} else if flagDisableLock {
-		log.Println("Disabling lock..")
 		pf.DisableLock()
-		log.Println("Done")
+		log.Println(stringsDone)
 	} 
 }
