@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const defaultConfPath = "/etc/pf.conf"
+const defaultConfPath string = "/etc/pf.conf"
 
 func NewPF(
 	allowIncoming bool,
@@ -22,8 +22,8 @@ func NewPF(
 		defaultConfPath:     defaultConfPath,
 		allowIncoming:       allowIncoming,
 		allowOutgoing:       allowOutgoing,
-		allowICMP:           allowICMP,
 		allowPrivateNetwork: allowPrivateNetwork,
+		allowICMP:           allowICMP,
 		ips:                 ips,
 		interfaces:          interfaces,
 	}
@@ -51,16 +51,14 @@ func (pf *PF) DisableLock() {
 	pf.loadConf(pf.defaultConfPath)
 }
 
-func (pf *PF) PrintLockRules() {
-	fmt.Println(pf.makeLockRules())
-}
-
 func (pf *PF) isEnabled() bool {
 	return strings.Contains(pf.exec("-si"), "Status: Enabled")
 }
 
-func (pf *PF) makeLockRules() string {
-	rules := "set block-policy return\n"
+func (pf *PF) BuildLockRules() string {
+	// based on eddie
+	var buf strings.Builder
+	buf.WriteString("set block-policy return\n")
 	interfaces := "lo0"
 	if len(pf.interfaces) > 0 {
 		interfaces = fmt.Sprintf(
@@ -69,52 +67,54 @@ func (pf *PF) makeLockRules() string {
 			strings.Join(pf.interfaces, " "),
 		)
 	}
-	rules += fmt.Sprintf("set skip on { %s }\n", interfaces)
-	rules += "scrub in all\n"
+	fmt.Fprintf(&buf, "set skip on { %s }\n", interfaces)
+	buf.WriteString("scrub in all\n")
 	if pf.allowIncoming {
-		rules += "pass in all\n"
+		buf.WriteString("pass in all\n")
 	} else {
-		rules += "block in all\n"
+		buf.WriteString("block in all\n")
 	}
 	if pf.allowOutgoing {
-		rules += "pass out all\n"
+		buf.WriteString("pass out all\n")
 	} else {
-		rules += "block out all\n"
+		buf.WriteString("block out all\n")
 	}
 	if pf.allowPrivateNetwork {
-		rules += "pass out quick inet from 192.168.0.0/16 to 192.168.0.0/16\n"
-		rules += "pass in quick inet from 192.168.0.0/16 to 192.168.0.0/16\n"
-		rules += "pass out quick inet from 172.16.0.0/12 to 172.16.0.0/12\n"
-		rules += "pass in quick inet from 172.16.0.0/12 to 172.16.0.0/12\n"
-		rules += "pass out quick inet from 10.0.0.0/8 to 10.0.0.0/8\n"
-		rules += "pass in quick inet from 10.0.0.0/8 to 10.0.0.0/8\n"
-		rules += "pass out quick inet from 192.168.0.0/16 to 224.0.0.0/24\n"
-		rules += "pass out quick inet from 172.16.0.0/12 to 224.0.0.0/24\n"
-		rules += "pass out quick inet from 10.0.0.0/8 to 224.0.0.0/24\n"
-		rules += "pass out quick inet from 192.168.0.0/16 to 239.255.255.250/32\n"
-		rules += "pass out quick inet from 172.16.0.0/12 to 239.255.255.250/32\n"
-		rules += "pass out quick inet from 10.0.0.0/8 to 239.255.255.250/32\n"
-		rules += "pass out quick inet from 192.168.0.0/16 to 239.255.255.253/32\n"
-		rules += "pass out quick inet from 172.16.0.0/12 to 239.255.255.253/32\n"
-		rules += "pass out quick inet from 10.0.0.0/8 to 239.255.255.253/32\n"
-		rules += "pass out quick inet6 from fe80::/10 to fe80::/10\n"
-		rules += "pass in quick inet6 from fe80::/10 to fe80::/10\n"
-		rules += "pass out quick inet6 from ff00::/8 to ff00::/8\n"
-		rules += "pass in quick inet6 from ff00::/8 to ff00::/8\n"
+		buf.WriteString("pass out quick inet from 192.168.0.0/16 to 192.168.0.0/16\n")
+		buf.WriteString("pass in quick inet from 192.168.0.0/16 to 192.168.0.0/16\n")
+		buf.WriteString("pass out quick inet from 172.16.0.0/12 to 172.16.0.0/12\n")
+		buf.WriteString("pass in quick inet from 172.16.0.0/12 to 172.16.0.0/12\n")
+		buf.WriteString("pass out quick inet from 10.0.0.0/8 to 10.0.0.0/8\n")
+		buf.WriteString("pass in quick inet from 10.0.0.0/8 to 10.0.0.0/8\n")
+		buf.WriteString("pass out quick inet from 192.168.0.0/16 to 224.0.0.0/24\n")
+		buf.WriteString("pass out quick inet from 172.16.0.0/12 to 224.0.0.0/24\n")
+		buf.WriteString("pass out quick inet from 10.0.0.0/8 to 224.0.0.0/24\n")
+		buf.WriteString("pass out quick inet from 192.168.0.0/16 to 239.255.255.250/32\n")
+		buf.WriteString("pass out quick inet from 172.16.0.0/12 to 239.255.255.250/32\n")
+		buf.WriteString("pass out quick inet from 10.0.0.0/8 to 239.255.255.250/32\n")
+		buf.WriteString("pass out quick inet from 192.168.0.0/16 to 239.255.255.253/32\n")
+		buf.WriteString("pass out quick inet from 172.16.0.0/12 to 239.255.255.253/32\n")
+		buf.WriteString("pass out quick inet from 10.0.0.0/8 to 239.255.255.253/32\n")
+		buf.WriteString("pass out quick inet6 from fe80::/10 to fe80::/10\n")
+		buf.WriteString("pass in quick inet6 from fe80::/10 to fe80::/10\n")
+		buf.WriteString("pass out quick inet6 from ff00::/8 to ff00::/8\n")
+		buf.WriteString("pass in quick inet6 from ff00::/8 to ff00::/8\n")
 	}
 	if pf.allowICMP {
-		rules += "pass quick proto icmp\n"
-		rules += "pass quick proto icmp6 all\n"
+		buf.WriteString("pass quick proto icmp\n")
+		buf.WriteString("pass quick proto icmp6 all\n")
 	}
 	ipRuleTmpl := "pass out quick %s from any to %s\n"
 	for _, ip := range pf.ips {
-		inet := "inet"
+		var inet string
 		if strings.Contains(ip, ":") {
 			inet = "inet6"
+		} else {
+			inet = "inet"
 		}
-		rules += fmt.Sprintf(ipRuleTmpl, inet, ip)
+		fmt.Fprintf(&buf, ipRuleTmpl, inet, ip)
 	}
-	return rules
+	return buf.String()
 }
 
 func (pf *PF) makeLockConf() string {
@@ -122,7 +122,7 @@ func (pf *PF) makeLockConf() string {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if _, err := tmpfile.WriteString(pf.makeLockRules()); err != nil {
+	if _, err := tmpfile.WriteString(pf.BuildLockRules()); err != nil {
 		log.Fatal(err)
 	}
 	if err := tmpfile.Close(); err != nil {
