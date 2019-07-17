@@ -19,7 +19,7 @@ func NewPF(
 	ips []string,
 	interfaces []string,
 ) *PF {
-	pf := &PF{
+	return &PF{
 		defaultConfPath:     defaultConfPath,
 		allowIncoming:       allowIncoming,
 		allowOutgoing:       allowOutgoing,
@@ -28,7 +28,6 @@ func NewPF(
 		ips:                 ips,
 		interfaces:          interfaces,
 	}
-	return pf
 }
 
 type PF struct {
