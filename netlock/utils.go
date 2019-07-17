@@ -5,32 +5,21 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
-	"strings"
 )
 
 func execCombinedOutput(filepath string, args ...string) string {
-	out, err := exec.Command(filepath, args...).CombinedOutput()
+	stdoutStderr, err := exec.Command(filepath, args...).CombinedOutput()
 	if err != nil {
-		os.Stderr.WriteString(string(out))
+		os.Stderr.Write(stdoutStderr)
 		log.Fatal(err)
 	}
-	return string(out)
-}
-
-func split(s string) []string {
-	var results []string
-	for _, v := range strings.Split(s, " ") {
-		if v != "" {
-			results = append(results, v)
-		}
-	}
-	return results
+	return string(stdoutStderr)
 }
 
 func isRoot() bool {
-	cuser, err := user.Current()
+	currentUser, err := user.Current()
 	if err != nil {
 		log.Fatal(err)
 	}
-	return cuser.Uid == "0"
+	return currentUser.Uid == "0"
 }

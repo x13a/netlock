@@ -2,22 +2,20 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
-	"strings"
+	"regexp"
 )
 
 const stringsDone string = "OK"
 
 type (
-	flagIPsType   []string
-	flagSliceType []string
-	flagHostsType []string
-	flagFilesType []string
+	flagServersType []string
+	flagSliceType   []string
+	flagFilesType   []string
 )
 
 var (
@@ -27,38 +25,33 @@ var (
 	flagAllowOutgoing       bool
 	flagAllowPrivateNetwork bool
 	flagAllowICMP           bool
-	flagIPs                 flagIPsType
+	flagServers             flagServersType
 	flagInterfaces          flagSliceType
-	flagHosts               flagHostsType
 	flagFiles               flagFilesType
 	flagPrintLockRules      bool
 )
 
-func addIP(ip string) error {
-	if addr := net.ParseIP(ip); addr != nil {
-		flagIPs = append(flagIPs, ip)
+func addServer(s string) error {
+	if net.ParseIP(s) != nil {
+		flagServers = append(flagServers, s)
 		return nil
 	}
-	return errors.New("Invalid ip")
-}
-
-func addHostIPs(host string) error {
-	addrs, err := net.LookupIP(host)
+	addrs, err := net.LookupIP(s)
 	if err != nil {
 		return err
 	}
 	for _, addr := range addrs {
-		flagIPs = append(flagIPs, addr.String())
+		flagServers = append(flagServers, addr.String())
 	}
 	return nil
 }
 
-func (s *flagIPsType) String() string {
+func (s *flagServersType) String() string {
 	return fmt.Sprint(*s)
 }
 
-func (s *flagIPsType) Set(val string) error {
-	return addIP(val)
+func (s *flagServersType) Set(val string) error {
+	return addServer(val)
 }
 
 func (s *flagSliceType) String() string {
@@ -68,14 +61,6 @@ func (s *flagSliceType) String() string {
 func (s *flagSliceType) Set(val string) error {
 	*s = append(*s, val)
 	return nil
-}
-
-func (s *flagHostsType) String() string {
-	return fmt.Sprint(*s)
-}
-
-func (s *flagHostsType) Set(val string) error {
-	return addHostIPs(val)
 }
 
 func (s *flagFilesType) String() string {
@@ -89,20 +74,25 @@ func (s *flagFilesType) Set(val string) error {
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
+	subgroup := `([^\s]{4,})`
+	re := regexp.MustCompile(fmt.Sprintf(
+		`(?:remote\s%s|Endpoint\s?=\s?%s:)`,
+		subgroup,
+		subgroup,
+	))
 	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "remote ") {
+		lineSubmatch := re.FindStringSubmatch(scanner.Text())
+		if lineSubmatch == nil {
 			continue
 		}
-		lineSlice := split(line)
-		if len(lineSlice) < 2 {
-			continue
+		var server string
+		for idx, submatch := range lineSubmatch {
+			if idx != 0 && submatch != "" {
+				server = submatch
+				break
+			}
 		}
-		ipOrHost := lineSlice[1]
-		if err := addIP(ipOrHost); err == nil {
-			continue
-		}
-		if err := addHostIPs(ipOrHost); err != nil {
+		if err := addServer(server); err != nil {
 			return err
 		}
 	}
@@ -124,10 +114,13 @@ func flagParse() {
 		"Allow private network",
 	)
 	flag.BoolVar(&flagAllowICMP, "allow-icmp", false, "Allow ICMP")
-	flag.Var(&flagIPs, "ip", "Pass to ip")
-	flag.Var(&flagInterfaces, "if", "Skip on interface")
-	flag.Var(&flagHosts, "host", "Pass to ips resolving host")
-	flag.Var(&flagFiles, "file", "Pass to ips parsing .ovpn file")
+	flag.Var(&flagServers, "pass", "Pass to ip/host")
+	flag.Var(&flagInterfaces, "skip", "Skip on interface")
+	flag.Var(
+		&flagFiles,
+		"file",
+		"Pass to servers from openvpn/wireguard configuration file",
+	)
 	flag.BoolVar(&flagPrintLockRules, "print", false, "Print lock rules")
 	flag.Parse()
 }
@@ -148,7 +141,7 @@ func main() {
 		flagAllowOutgoing,
 		flagAllowPrivateNetwork,
 		flagAllowICMP,
-		flagIPs,
+		flagServers,
 		flagInterfaces,
 	)
 	if flagPrintLockRules {

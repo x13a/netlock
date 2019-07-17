@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -55,8 +56,8 @@ func (pf *PF) isEnabled() bool {
 	return strings.Contains(pf.exec("-si"), "Status: Enabled")
 }
 
+// Based on Eddie
 func (pf *PF) BuildLockRules() string {
-	// based on eddie
 	var buf strings.Builder
 	buf.WriteString("set block-policy return\n")
 	interfaces := "lo0"
@@ -118,17 +119,19 @@ func (pf *PF) BuildLockRules() string {
 }
 
 func (pf *PF) makeLockConf() string {
-	tmpfile, err := ioutil.TempFile("", "netlock.*.conf")
+	tmpFile, err := ioutil.TempFile("", "netlock.*.conf")
 	if err != nil {
 		log.Fatal(err)
 	}
-	if _, err := tmpfile.WriteString(pf.BuildLockRules()); err != nil {
+	if _, err := tmpFile.WriteString(pf.BuildLockRules()); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
 		log.Fatal(err)
 	}
-	if err := tmpfile.Close(); err != nil {
+	if err := tmpFile.Close(); err != nil {
 		log.Fatal(err)
 	}
-	return tmpfile.Name()
+	return tmpFile.Name()
 }
 
 func (pf *PF) preconfig() {
