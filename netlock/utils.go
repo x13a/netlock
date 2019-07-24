@@ -1,25 +1,11 @@
 package main
 
-import (
-	"log"
-	"os"
-	"os/exec"
-	"os/user"
-)
+import "os/user"
 
-func execCombinedOutput(filepath string, args ...string) string {
-	stdoutStderr, err := exec.Command(filepath, args...).CombinedOutput()
-	if err != nil {
-		os.Stderr.Write(stdoutStderr)
-		log.Fatal(err)
-	}
-	return string(stdoutStderr)
-}
-
-func isRoot() bool {
+func isRoot() (bool, error) {
 	currentUser, err := user.Current()
 	if err != nil {
-		log.Fatal(err)
+		return false, err
 	}
-	return currentUser.Uid == "0"
+	return currentUser.Uid == "0", nil
 }

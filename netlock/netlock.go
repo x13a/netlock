@@ -5,61 +5,54 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"regexp"
+	"strings"
 )
 
-const stringsDone string = "OK"
-
 type (
-	flagServersType []string
-	flagSliceType   []string
-	flagFilesType   []string
+	flagDestinationsType struct{}
+	flagInterfacesType   struct{}
+	flagFilesType        struct{}
 )
 
 var (
-	flagEnableLock          bool
-	flagDisableLock         bool
-	flagAllowIncoming       bool
-	flagAllowOutgoing       bool
-	flagAllowPrivateNetwork bool
-	flagAllowICMP           bool
-	flagServers             flagServersType
-	flagInterfaces          flagSliceType
-	flagFiles               flagFilesType
-	flagPrintLockRules      bool
+	flagEnableLock               bool
+	flagDisableLock              bool
+	flagDefaultConfigurationPath string
+	flagAllowIncoming            bool
+	flagAllowOutgoing            bool
+	flagAllowPrivateNetworks     bool
+	flagAllowICMP                bool
+	flagDestinations             flagDestinationsType
+	flagInterfaces               flagInterfacesType
+	flagFiles                    flagFilesType
+	flagPrintLockRules           bool
+	destinations                 []string
+	interfaces                   []string
 )
 
-func addServer(s string) error {
-	if net.ParseIP(s) != nil {
-		flagServers = append(flagServers, s)
-		return nil
+func setMultiple(dest *[]string, vals string) {
+	for _, val := range strings.Split(vals, ",") {
+		*dest = append(*dest, strings.TrimSpace(val))
 	}
-	addrs, err := net.LookupIP(s)
-	if err != nil {
-		return err
-	}
-	for _, addr := range addrs {
-		flagServers = append(flagServers, addr.String())
-	}
+}
+
+func (s *flagDestinationsType) String() string {
+	return fmt.Sprint(*s)
+}
+
+func (s *flagDestinationsType) Set(val string) error {
+	setMultiple(&destinations, val)
 	return nil
 }
 
-func (s *flagServersType) String() string {
+func (s *flagInterfacesType) String() string {
 	return fmt.Sprint(*s)
 }
 
-func (s *flagServersType) Set(val string) error {
-	return addServer(val)
-}
-
-func (s *flagSliceType) String() string {
-	return fmt.Sprint(*s)
-}
-
-func (s *flagSliceType) Set(val string) error {
-	*s = append(*s, val)
+func (s *flagInterfacesType) Set(val string) error {
+	setMultiple(&interfaces, val)
 	return nil
 }
 
@@ -85,16 +78,14 @@ func (s *flagFilesType) Set(val string) error {
 		if lineSubmatch == nil {
 			continue
 		}
-		var server string
+		var destination string
 		for idx, submatch := range lineSubmatch {
 			if idx != 0 && submatch != "" {
-				server = submatch
+				destination = submatch
 				break
 			}
 		}
-		if err := addServer(server); err != nil {
-			return err
-		}
+		destinations = append(destinations, destination)
 	}
 	if err := scanner.Err(); err != nil {
 		return err
@@ -105,21 +96,27 @@ func (s *flagFilesType) Set(val string) error {
 func flagParse() {
 	flag.BoolVar(&flagEnableLock, "e", false, "Enable")
 	flag.BoolVar(&flagDisableLock, "d", false, "Disable")
+	flag.StringVar(
+		&flagDefaultConfigurationPath,
+		"default-configuration-path",
+		"",
+		"Custom default configuration path",
+	)
 	flag.BoolVar(&flagAllowIncoming, "allow-incoming", false, "Allow incoming")
 	flag.BoolVar(&flagAllowOutgoing, "allow-outgoing", false, "Allow outgoing")
 	flag.BoolVar(
-		&flagAllowPrivateNetwork,
-		"allow-private-network",
+		&flagAllowPrivateNetworks,
+		"allow-private-networks",
 		false,
-		"Allow private network",
+		"Allow private networks",
 	)
 	flag.BoolVar(&flagAllowICMP, "allow-icmp", false, "Allow ICMP")
-	flag.Var(&flagServers, "pass", "Pass to ip/host")
-	flag.Var(&flagInterfaces, "skip", "Skip on interface")
+	flag.Var(&flagDestinations, "pass", "Pass to destinations")
+	flag.Var(&flagInterfaces, "skip", "Skip on interfaces")
 	flag.Var(
 		&flagFiles,
 		"file",
-		"Pass to servers from openvpn/wireguard configuration file",
+		"Pass to destinations from openvpn/wireguard configuration file",
 	)
 	flag.BoolVar(&flagPrintLockRules, "print", false, "Print lock rules")
 	flag.Parse()
@@ -129,7 +126,8 @@ func init() {
 	flagParse()
 	if flagEnableLock && flagDisableLock {
 		log.Fatal("Enable and disable are mutually exclusive")
-	} else if !flagEnableLock && !flagDisableLock && !flagPrintLockRules {
+	}
+	if !flagEnableLock && !flagDisableLock && !flagPrintLockRules {
 		flag.PrintDefaults()
 		os.Exit(64)
 	}
@@ -137,21 +135,22 @@ func init() {
 
 func main() {
 	pf := NewPF(
+		flagDefaultConfigurationPath,
 		flagAllowIncoming,
 		flagAllowOutgoing,
-		flagAllowPrivateNetwork,
+		flagAllowPrivateNetworks,
 		flagAllowICMP,
-		flagServers,
-		flagInterfaces,
+		destinations,
+		interfaces,
 	)
 	if flagPrintLockRules {
 		fmt.Println(pf.BuildLockRules())
 	}
 	if flagEnableLock {
 		pf.EnableLock()
-		fmt.Println(stringsDone)
+		fmt.Println("OK")
 	} else if flagDisableLock {
 		pf.DisableLock()
-		fmt.Println(stringsDone)
+		fmt.Println("OK")
 	}
 }
