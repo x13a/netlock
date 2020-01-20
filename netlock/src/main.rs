@@ -222,14 +222,20 @@ fn main() -> Result<(), String> {
         return Ok(());
     }
     let mut m = pf::Manager::default();
-    m.opts.pass_interfaces.extend_from_slice(&nsargs.pass);
-    m.opts.skip_interfaces.extend_from_slice(&nsargs.skip);
-    m.opts.in_destinations.extend_from_slice(&nsargs.in_d);
-    m.opts.out_destinations.extend_from_slice(&nsargs.out_d);
+    let mut merge_args = || {
+        m.opts.pass_interfaces.extend_from_slice(&nsargs.pass);
+        m.opts.skip_interfaces.extend_from_slice(&nsargs.skip);
+        m.opts.in_destinations.extend_from_slice(&nsargs.in_d);
+        m.opts.out_destinations.extend_from_slice(&nsargs.out_d);
+    };
     let str_ok = "OK";
     match nsargs.command.expect("nsargs.command is None") {
-        Command::Print => print!("{}", &m.opts.build()),
+        Command::Print => {
+            merge_args();
+            print!("{}", &m.opts.build());
+        }
         Command::Enable => {
+            merge_args();
             m.enable().map_err(|e| e.to_string())?;
             println!("{}", str_ok);
         }

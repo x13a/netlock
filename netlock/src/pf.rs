@@ -1,7 +1,8 @@
 use std::ffi::OsStr;
 use std::fmt::Write;
-use std::fs;
+use std::fs::{create_dir_all, set_permissions, write, Permissions};
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
@@ -64,8 +65,9 @@ impl Manager {
     }
 
     fn make_configuration(&self) -> io::Result<()> {
-        fs::create_dir_all(&self.conf_path.parent().unwrap_or(&self.conf_path))?;
-        fs::write(&self.conf_path, &self.opts.build())?;
+        create_dir_all(&self.conf_path.parent().unwrap_or(&self.conf_path))?;
+        write(&self.conf_path, &self.opts.build())?;
+        set_permissions(&self.conf_path, Permissions::from_mode(0o600))?;
         Ok(())
     }
 }
@@ -112,10 +114,9 @@ impl Ctl {
     }
 
     fn is_enabled(&self) -> ExecResult<bool> {
-        Ok(
-            String::from_utf8_lossy(&self.exec(&["-s", "info"])?.stdout)
-                .contains("Status: Enabled"),
-        )
+        Ok(String::from_utf8_lossy(&self.exec(&["-s", "info"])?.stdout)
+            .to_lowercase()
+            .contains("status: enabled"))
     }
 
     fn load_configuration<P: AsRef<Path>>(&self, path: P) -> ExecResult<()> {
