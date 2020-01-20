@@ -16,6 +16,7 @@ mod flag {
     pub const PRINT: &str = "-P";
     pub const ENABLE: &str = "-e";
     pub const DISABLE: &str = "-d";
+    pub const LOAD: &str = "-l";
 }
 
 mod metavar {
@@ -28,11 +29,17 @@ enum Command {
     Print,
     Enable,
     Disable,
+    Load,
 }
 
 impl Command {
     fn iter() -> Iter<'static, Self> {
-        static COMMAND: [Command; 3] = [Command::Print, Command::Enable, Command::Disable];
+        static COMMAND: [Command; 4] = [
+            Command::Print,
+            Command::Enable,
+            Command::Disable,
+            Command::Load,
+        ];
         COMMAND.iter()
     }
 }
@@ -45,6 +52,7 @@ impl FromStr for Command {
             flag::PRINT => Ok(Self::Print),
             flag::ENABLE => Ok(Self::Enable),
             flag::DISABLE => Ok(Self::Disable),
+            flag::LOAD => Ok(Self::Load),
             _ => Err(format!("Invalid command value: `{}`", s)),
         }
     }
@@ -56,6 +64,7 @@ impl Display for Command {
             Self::Print => write!(f, "{}", flag::PRINT),
             Self::Enable => write!(f, "{}", flag::ENABLE),
             Self::Disable => write!(f, "{}", flag::DISABLE),
+            Self::Load => write!(f, "{}", flag::LOAD),
         }
     }
 }
@@ -94,12 +103,14 @@ fn print_usage(to: PrintDestination) {
          [{o}] * Pass out to <{D}> (can be filepath)\n\n\
          [{}] * Print rules and exit\n\
          [{}] * Enable lock\n\
-         [{}] * Disable lock",
+         [{}] * Disable lock\n\
+         [{}] * Load lock",
         &get_prog_name(),
         &collect_to_string(Command::iter()),
         &Command::Print.to_string(),
         &Command::Enable.to_string(),
         &Command::Disable.to_string(),
+        &Command::Load.to_string(),
         h = flag::HELP,
         v = flag::VERSION,
         s = flag::SKIP,
@@ -185,8 +196,9 @@ fn parse_args() -> Result<NSArgs, String> {
                         ));
                     }
                     nsargs.command = Some(cmd);
-                    if let Command::Disable = cmd {
-                        return Ok(nsargs);
+                    match cmd {
+                        Command::Disable | Command::Load => return Ok(nsargs),
+                        _ => {}
                     }
                 }
                 _ => return Err(format!("Invalid argument: `{}`", arg)),
@@ -223,6 +235,10 @@ fn main() -> Result<(), String> {
         }
         Command::Disable => {
             m.disable().map_err(|e| e.to_string())?;
+            println!("{}", str_ok);
+        }
+        Command::Load => {
+            m.load().map_err(|e| e.to_string())?;
             println!("{}", str_ok);
         }
     }

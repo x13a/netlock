@@ -36,13 +36,8 @@ impl Manager {
     }
 
     pub fn enable(&mut self) -> ExecResult<()> {
-        if !self.ctl.is_enabled()? {
-            self.ctl.enable()?;
-        }
         self.make_configuration()?;
-        self.ctl.load_configuration(&self.conf_path)?;
-        self.state = true;
-        Ok(())
+        self.load()
     }
 
     pub fn disable(&mut self) -> ExecResult<()> {
@@ -52,6 +47,15 @@ impl Manager {
             self.ctl.load_configuration(&self.ctl.conf_path)?;
         }
         self.state = false;
+        Ok(())
+    }
+
+    pub fn load(&mut self) -> ExecResult<()> {
+        if !self.ctl.is_enabled()? {
+            self.ctl.enable()?;
+        }
+        self.ctl.load_configuration(&self.conf_path)?;
+        self.state = true;
         Ok(())
     }
 
