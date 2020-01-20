@@ -14,9 +14,9 @@ mod flag {
     pub const IN: &str = "-i";
     pub const OUT: &str = "-o";
     pub const PRINT: &str = "-P";
-    pub const ENABLE: &str = "-e";
-    pub const DISABLE: &str = "-d";
-    pub const LOAD: &str = "-l";
+    pub const ENABLE: &str = "-E";
+    pub const DISABLE: &str = "-D";
+    pub const LOAD: &str = "-L";
 }
 
 mod metavar {
