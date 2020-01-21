@@ -102,11 +102,11 @@ impl IsExecutable for Path {
 }
 
 #[cfg(unix)]
-pub fn clear_permissions<P: AsRef<Path>>(path: P, perms: Permissions) -> io::Result<()> {
+pub fn clear_permissions<P: AsRef<Path>>(path: P, perm: Permissions) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let mode = path.as_ref().metadata()?.permissions().mode();
-    set_permissions(path, Permissions::from_mode(mode & !perms.mode()))
+    set_permissions(path, Permissions::from_mode(mode & !perm.mode()))
 }
 
 #[cfg(unix)]
