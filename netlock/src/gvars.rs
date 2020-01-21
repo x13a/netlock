@@ -18,4 +18,6 @@ pub const IPV4_NOT_ROUTABLE_MULTICASTS: [&str; 1] = ["224.0.0.0/24"];
 pub const IPV6_NOT_ROUTABLE_MULTICASTS: [&str; 2] = ["ff02::/16", "ff12::/16"];
 
 #[cfg(unix)]
-pub const DEFAULT_LOCK_CONF_PATH: &str = "~/.config/me.lucky.netlock/netlock.conf";
+pub const DEFAULT_CONF_DIR: &str = "~/.config/me.lucky.netlock/";
+pub const CONF_FILE_NAME: &str = "netlock.conf";
+pub const STATE_FILE_NAME: &str = "state";

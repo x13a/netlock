@@ -1,8 +1,7 @@
 use std::ffi::OsStr;
 use std::fmt::Write;
-use std::fs::{create_dir_all, set_permissions, write, Permissions};
+use std::fs::{create_dir_all, remove_file, write};
 use std::io;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
@@ -10,18 +9,18 @@ use crate::gvars;
 use crate::utils::{self, ExecResult, ExpandUser, IsExecutable};
 
 pub struct Manager {
-    conf_path: PathBuf,
+    conf_dir: PathBuf,
     state: bool,
     ctl: Ctl,
     pub opts: Options,
 }
 
 impl Manager {
-    pub fn new(conf_path: impl Into<PathBuf>, ctl: Ctl, opts: Options) -> Self {
-        let conf_path = conf_path.into().expanduser();
-        assert!(!conf_path.starts_with("~"));
+    pub fn new(conf_dir: impl Into<PathBuf>, ctl: Ctl, opts: Options) -> Self {
+        let conf_dir = conf_dir.into().expanduser();
+        assert!(!conf_dir.starts_with("~"));
         Self {
-            conf_path,
+            conf_dir,
             state: false,
             ctl,
             opts,
@@ -34,8 +33,13 @@ impl Manager {
     }
 
     pub fn disable(&mut self) -> ExecResult<()> {
+        let state_path = &self.get_state_path();
+        if state_path.is_file() {
+            self.ctl.state = true;
+        }
         if self.ctl.state {
             self.ctl.disable()?;
+            remove_file(state_path)?;
         } else {
             self.ctl.load_configuration(&self.ctl.conf_path)?;
         }
@@ -46,8 +50,9 @@ impl Manager {
     pub fn load(&mut self) -> ExecResult<()> {
         if !self.ctl.is_enabled()? {
             self.ctl.enable()?;
+            self.make_state()?;
         }
-        self.ctl.load_configuration(&self.conf_path)?;
+        self.ctl.load_configuration(&self.get_conf_path())?;
         self.state = true;
         Ok(())
     }
@@ -57,20 +62,30 @@ impl Manager {
     }
 
     fn make_configuration(&self) -> io::Result<()> {
-        create_dir_all(&self.conf_path.parent().unwrap_or(&self.conf_path))?;
-        write(&self.conf_path, &self.opts.build())?;
-        set_permissions(&self.conf_path, Permissions::from_mode(0o600))?;
-        Ok(())
+        create_dir_all(&self.conf_dir)?;
+        let conf_path = &self.get_conf_path();
+        write(conf_path, &self.opts.build())?;
+        utils::clear_go_permissions(conf_path)
+    }
+
+    fn make_state(&self) -> io::Result<()> {
+        let state_path = &self.get_state_path();
+        write(state_path, "")?;
+        utils::clear_go_permissions(state_path)
+    }
+
+    fn get_conf_path(&self) -> PathBuf {
+        self.conf_dir.join(gvars::CONF_FILE_NAME)
+    }
+
+    fn get_state_path(&self) -> PathBuf {
+        self.conf_dir.join(gvars::STATE_FILE_NAME)
     }
 }
 
 impl Default for Manager {
     fn default() -> Self {
-        Self::new(
-            gvars::DEFAULT_LOCK_CONF_PATH,
-            Ctl::default(),
-            Options::default(),
-        )
+        Self::new(gvars::DEFAULT_CONF_DIR, Ctl::default(), Options::default())
     }
 }
 

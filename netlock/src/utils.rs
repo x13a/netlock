@@ -2,6 +2,7 @@ use std::env;
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt::{self, Display, Formatter};
+use std::fs::{set_permissions, Permissions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -98,6 +99,21 @@ impl IsExecutable for Path {
     fn is_executable(&self) -> bool {
         is_executable(self)
     }
+}
+
+#[cfg(unix)]
+pub fn clear_permissions<P: AsRef<Path>>(path: P, perms: Permissions) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = path.as_ref().metadata()?.permissions().mode();
+    set_permissions(path, Permissions::from_mode(mode & !perms.mode()))
+}
+
+#[cfg(unix)]
+pub fn clear_go_permissions<P: AsRef<Path>>(path: P) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    clear_permissions(path, Permissions::from_mode(0o077))
 }
 
 pub fn time() -> u64 {
