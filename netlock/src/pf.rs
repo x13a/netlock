@@ -16,14 +16,14 @@ pub struct Manager {
 }
 
 impl Manager {
-    pub fn new(conf_dir: impl Into<PathBuf>, ctl: Ctl, opts: Options) -> Self {
+    pub fn new(conf_dir: impl Into<PathBuf>, ctl: Ctl) -> Self {
         let conf_dir = conf_dir.into().expanduser();
         assert!(!conf_dir.starts_with("~"));
         Self {
             conf_dir,
             state: false,
             ctl,
-            opts,
+            opts: Default::default(),
         }
     }
 
@@ -85,7 +85,7 @@ impl Manager {
 
 impl Default for Manager {
     fn default() -> Self {
-        Self::new(gvars::DEFAULT_CONF_DIR, Ctl::default(), Options::default())
+        Self::new(gvars::DEFAULT_CONF_DIR, Default::default())
     }
 }
 
