@@ -9,14 +9,6 @@ use std::process::Output;
 use crate::gvars;
 use crate::utils::{self, ExecResult, ExpandUser, IsExecutable};
 
-pub const DEFAULT_CTL_PATH: &str = "/sbin/pfctl";
-pub const DEFAULT_CONF_PATH: &str = "/etc/pf.conf";
-
-pub const DEFAULT_IN_TABLE_NAME: &str = "netlock_pass_in";
-pub const DEFAULT_OUT_TABLE_NAME: &str = "netlock_pass_out";
-
-const ANTISPOOFING_SOURCES: [&str; 2] = ["no-route", "urpf-failed"];
-
 pub struct Manager {
     conf_path: PathBuf,
     state: bool,
@@ -88,7 +80,10 @@ pub struct Ctl {
     state: bool,
 }
 
-impl Ctl {
+impl<'a> Ctl {
+    pub const DEFAULT_CTL_PATH: &'a str = "/sbin/pfctl";
+    pub const DEFAULT_CONF_PATH: &'a str = "/etc/pf.conf";
+
     pub fn new<P: Into<PathBuf>>(ctl_path: P, conf_path: P) -> Self {
         let ctl_path = ctl_path.into();
         assert!(ctl_path.is_executable());
@@ -120,13 +115,8 @@ impl Ctl {
     }
 
     fn load_configuration<P: AsRef<Path>>(&self, path: P) -> ExecResult<()> {
-        self.exec(&[
-            OsStr::new("-F"),
-            OsStr::new("all"),
-            OsStr::new("-f"),
-            path.as_ref().as_os_str(),
-        ])
-        .and(Ok(()))
+        self.exec(&[OsStr::new("-f"), path.as_ref().as_os_str()])
+            .and(Ok(()))
     }
 
     fn exec<S: AsRef<OsStr>>(&self, args: &[S]) -> ExecResult<Output> {
@@ -136,7 +126,7 @@ impl Ctl {
 
 impl Default for Ctl {
     fn default() -> Self {
-        Self::new(DEFAULT_CTL_PATH, DEFAULT_CONF_PATH)
+        Self::new(Self::DEFAULT_CTL_PATH, Self::DEFAULT_CONF_PATH)
     }
 }
 
@@ -200,7 +190,12 @@ pub struct Options {
     pub out_destinations: Vec<String>,
 }
 
-impl Options {
+impl<'a> Options {
+    pub const DEFAULT_IN_TABLE_NAME: &'a str = "netlock_pass_in";
+    pub const DEFAULT_OUT_TABLE_NAME: &'a str = "netlock_pass_out";
+
+    const ANTISPOOFING_SOURCES: [&'a str; 2] = ["no-route", "urpf-failed"];
+
     pub fn new(in_table_name: &str, out_table_name: &str) -> Self {
         Self {
             in_table_name: in_table_name.into(),
@@ -271,7 +266,7 @@ impl Options {
             writeln!(
                 &mut s,
                 "block in quick from {{ {} }} to any",
-                &ANTISPOOFING_SOURCES.join(", "),
+                &Self::ANTISPOOFING_SOURCES.join(", "),
             );
         }
         if self.is_block_ipv6 {
@@ -360,8 +355,8 @@ impl Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            in_table_name: DEFAULT_IN_TABLE_NAME.into(),
-            out_table_name: DEFAULT_OUT_TABLE_NAME.into(),
+            in_table_name: Self::DEFAULT_IN_TABLE_NAME.into(),
+            out_table_name: Self::DEFAULT_OUT_TABLE_NAME.into(),
             block_policy: Default::default(),
             incoming: Default::default(),
             outgoing: Default::default(),
