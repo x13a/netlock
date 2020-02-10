@@ -19,5 +19,5 @@ pub const IPV6_NOT_ROUTABLE_MULTICASTS: [&str; 2] = ["ff02::/16", "ff12::/16"];
 
 #[cfg(unix)]
 pub const DEFAULT_CONF_DIR: &str = "~/.config/me.lucky.netlock/";
-pub const CONF_FILE_NAME: &str = "netlock.conf";
-pub const STATE_FILE_NAME: &str = "state";
+pub const FIREWALL_CONF_FILE_NAME: &str = "firewall.conf";
+pub const SETTINGS_CONF_FILE_NAME: &str = "settings.conf";

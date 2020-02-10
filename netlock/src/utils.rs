@@ -1,11 +1,11 @@
-use std::env;
+use std::env::var_os;
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{set_permissions, Permissions};
-use std::io;
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::time::SystemTime;
 
 #[derive(Debug)]
@@ -18,7 +18,7 @@ impl Display for ExecError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::IO(e) => e.fmt(f),
-            Self::Status(o) => write!(f, "{}", String::from_utf8_lossy(&o.stderr)),
+            Self::Status(o) => write!(f, "{}", &String::from_utf8_lossy(&o.stderr)),
         }
     }
 }
@@ -40,11 +40,11 @@ impl From<io::Error> for ExecError {
 
 pub type ExecResult<T> = Result<T, ExecError>;
 
-pub fn exec<S, I, V>(program: S, args: I) -> ExecResult<Output>
+pub fn exec<S1, I, S2>(program: S1, args: I) -> ExecResult<Output>
 where
-    S: AsRef<OsStr>,
-    I: IntoIterator<Item = V>,
-    V: AsRef<OsStr>,
+    S1: AsRef<OsStr>,
+    I: IntoIterator<Item = S2>,
+    S2: AsRef<OsStr>,
 {
     let output = Command::new(program).args(args).output()?;
     if !output.status.success() {
@@ -54,8 +54,40 @@ where
 }
 
 #[cfg(unix)]
+pub fn exec_stdin<S1, I, S2, S3>(program: S1, args: I, input: S3) -> ExecResult<Output>
+where
+    S1: AsRef<OsStr>,
+    I: IntoIterator<Item = S2>,
+    S2: AsRef<OsStr>,
+    S3: AsRef<OsStr>,
+{
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(input.as_ref().as_bytes())?;
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
+            return Err(ExecError::Status(output));
+        }
+        Ok(output)
+    } else {
+        child.kill()?;
+        Err(ExecError::IO(io::Error::new(
+            ErrorKind::Other,
+            "Failed to open stdin",
+        )))
+    }
+}
+
+#[cfg(unix)]
 pub fn get_homepath() -> Option<PathBuf> {
-    env::var_os("HOME").map(PathBuf::from)
+    var_os("HOME").map(PathBuf::from)
 }
 
 #[cfg(unix)]
@@ -121,4 +153,8 @@ pub fn time() -> u64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+pub fn is_osx() -> bool {
+    cfg!(target_os = "macos")
 }

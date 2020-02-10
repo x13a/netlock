@@ -1,4 +1,5 @@
 use std::env::args;
+use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::path::Path;
 use std::slice::Iter;
@@ -9,6 +10,8 @@ use netlock::pf;
 mod flag {
     pub const HELP: &str = "-h";
     pub const VERSION: &str = "-V";
+    pub const SKIPASS_LOOPBACK: &str = "-l";
+    pub const ANCHOR: &str = "-a";
     pub const SKIP: &str = "-s";
     pub const PASS: &str = "-p";
     pub const IN: &str = "-i";
@@ -17,9 +20,11 @@ mod flag {
     pub const ENABLE: &str = "-E";
     pub const DISABLE: &str = "-D";
     pub const LOAD: &str = "-L";
+    pub const STATUS: &str = "-S";
 }
 
 mod metavar {
+    pub const ANCHOR: &str = "ANCHOR";
     pub const INTERFACE: &str = "INTERFACE";
     pub const DESTINATION: &str = "DESTINATION";
 }
@@ -30,15 +35,17 @@ enum Command {
     Enable,
     Disable,
     Load,
+    Status,
 }
 
 impl Command {
     fn iter() -> Iter<'static, Self> {
-        static COMMAND: [Command; 4] = [
+        static COMMAND: [Command; 5] = [
             Command::Print,
             Command::Enable,
             Command::Disable,
             Command::Load,
+            Command::Status,
         ];
         COMMAND.iter()
     }
@@ -53,6 +60,7 @@ impl FromStr for Command {
             flag::ENABLE => Ok(Self::Enable),
             flag::DISABLE => Ok(Self::Disable),
             flag::LOAD => Ok(Self::Load),
+            flag::STATUS => Ok(Self::Status),
             _ => Err(format!("Invalid command value: `{}`", s)),
         }
     }
@@ -65,6 +73,7 @@ impl Display for Command {
             Self::Enable => write!(f, "{}", flag::ENABLE),
             Self::Disable => write!(f, "{}", flag::DISABLE),
             Self::Load => write!(f, "{}", flag::LOAD),
+            Self::Status => write!(f, "{}", flag::STATUS),
         }
     }
 }
@@ -93,30 +102,39 @@ enum PrintDestination {
 
 fn print_usage(to: PrintDestination) {
     let usage = format!(
-        "{} [{h}] [{v}] [.. {s} <{I}>] [.. {p} <{I}>] [.. {i} <{D}>] [.. {o} <{D}>]\n\
-         \t{{ {} }}\n\n\
+        "{} [{h}] [{v}] [{l}] [{a} <{A}>] [.. {s} <{I}>] [.. {p} <{I}>]\n\
+         \t[.. {i} <{D}>] [.. {o} <{D}>] {{ {} }}\n\n\
          [{h}] * Print help and exit\n\
          [{v}] * Print version and exit\n\n\
+         [{l}] * Skipass on loopback\n\
          [{s}] * Skip on <{I}>\n\
          [{p}] * Pass on <{I}>\n\
          [{i}] * Pass in from <{D}> (can be filepath)\n\
-         [{o}] * Pass out to <{D}> (can be filepath)\n\n\
+         [{o}] * Pass out to <{D}> (can be filepath)\n\
+         [{a}] * Use <{A}> (`{}` will be replaced to `{}`)\n\n\
          [{}] * Print rules and exit\n\
          [{}] * Enable lock\n\
          [{}] * Disable lock\n\
-         [{}] * Load lock",
+         [{}] * Load lock\n\
+         [{}] * Show status",
         &get_prog_name(),
         &collect_to_string(Command::iter()),
+        &pf::Manager::ANCHOR_REPLACE_FROM,
+        &pf::Manager::ANCHOR_REPLACE_TO,
         &Command::Print.to_string(),
         &Command::Enable.to_string(),
         &Command::Disable.to_string(),
         &Command::Load.to_string(),
+        &Command::Status.to_string(),
         h = flag::HELP,
         v = flag::VERSION,
+        l = flag::SKIPASS_LOOPBACK,
+        a = flag::ANCHOR,
         s = flag::SKIP,
         p = flag::PASS,
         i = flag::IN,
         o = flag::OUT,
+        A = metavar::ANCHOR,
         I = metavar::INTERFACE,
         D = metavar::DESTINATION,
     );
@@ -126,10 +144,65 @@ fn print_usage(to: PrintDestination) {
     }
 }
 
+pub enum Color<'a> {
+    Red(&'a str),
+    Green(&'a str),
+}
+
+impl<'a> Color<'_> {
+    const ENDC: &'a str = "\x1b[0m";
+    const RED: &'a str = "\x1b[31m";
+    const GREEN: &'a str = "\x1b[32m";
+}
+
+impl Display for Color<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Red(s) => write!(f, "{}{}{}", Self::RED, s, Self::ENDC),
+            Self::Green(s) => write!(f, "{}{}{}", Self::GREEN, s, Self::ENDC),
+        }
+    }
+}
+
+fn print_status(status: &pf::Status) {
+    let display_state = |v: bool| {
+        if v {
+            Color::Green("ENABLED")
+        } else {
+            Color::Red("DISABLED")
+        }
+    };
+    println!(
+        "\n\
+         FIREWALL {}\n\
+         NETLOCK  {}*\n",
+        &display_state(status.get_firewall_state()),
+        &display_state(status.get_netlock_state()),
+    );
+    let rules = status.get_rules();
+    if !rules.is_empty() {
+        let max_len = rules
+            .iter()
+            .flat_map(|s| s.lines())
+            .map(|s| s.len())
+            .max()
+            .unwrap_or(0);
+        let print_sep = || println!("{}", "-".repeat(max_len));
+        print_sep();
+        for rule in rules {
+            print!("{}", rule);
+            print_sep();
+        }
+        println!();
+    }
+}
+
 #[derive(Default)]
 struct NSArgs {
     is_help: bool,
     is_version: bool,
+    is_skipass_loopback: bool,
+    anchor: Option<String>,
     command: Option<Command>,
     skip: Vec<String>,
     pass: Vec<String>,
@@ -159,6 +232,7 @@ fn parse_args() -> Result<NSArgs, String> {
                 nsargs.is_version = true;
                 return Ok(nsargs);
             }
+            flag::SKIPASS_LOOPBACK => nsargs.is_skipass_loopback = true,
             flag::SKIP => match argv.get(idx) {
                 Some(s) => {
                     nsargs.skip.push(s.into());
@@ -187,17 +261,18 @@ fn parse_args() -> Result<NSArgs, String> {
                 }
                 _ => return err_missing_arg(metavar::DESTINATION),
             },
+            flag::ANCHOR => match argv.get(idx) {
+                Some(s) => {
+                    nsargs.anchor = Some(s.into());
+                    idx += 1;
+                }
+                _ => return err_missing_arg(metavar::ANCHOR),
+            },
             s => match Command::from_str(s) {
                 Ok(cmd) => {
-                    if nsargs.command.is_some() {
-                        return Err(format!(
-                            "Command is already set: `{}`",
-                            nsargs.command.expect("nsargs.command is None"),
-                        ));
-                    }
                     nsargs.command = Some(cmd);
                     match cmd {
-                        Command::Disable | Command::Load => return Ok(nsargs),
+                        Command::Disable | Command::Status => break,
                         _ => {}
                     }
                 }
@@ -211,7 +286,9 @@ fn parse_args() -> Result<NSArgs, String> {
     err_missing_arg(&collect_to_string(Command::iter()))
 }
 
-fn main() -> Result<(), String> {
+type MainResult = Result<(), Box<dyn Error>>;
+
+fn main() -> MainResult {
     let nsargs = parse_args()?;
     if nsargs.is_help {
         print_usage(PrintDestination::Stdout);
@@ -221,31 +298,40 @@ fn main() -> Result<(), String> {
         println!("{}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    let mut m = pf::Manager::default();
-    let mut merge_args = || {
-        m.opts.pass_interfaces.extend_from_slice(&nsargs.pass);
-        m.opts.skip_interfaces.extend_from_slice(&nsargs.skip);
-        m.opts.in_destinations.extend_from_slice(&nsargs.in_d);
-        m.opts.out_destinations.extend_from_slice(&nsargs.out_d);
+    let mut loader = pf::Loader::default();
+    let mut update_rules = || -> MainResult {
+        let manager = loader.get_manager();
+        if nsargs.is_skipass_loopback {
+            manager.set_skipass_loopback()?;
+        }
+        let rules = manager.get_rules();
+        rules.skip_interfaces.extend_from_slice(&nsargs.skip);
+        rules.pass_interfaces.extend_from_slice(&nsargs.pass);
+        rules.in_destinations.extend_from_slice(&nsargs.in_d);
+        rules.out_destinations.extend_from_slice(&nsargs.out_d);
+        Ok(())
     };
-    let str_ok = "OK";
+    let print_ok = || println!("OK");
     match nsargs.command.expect("nsargs.command is None") {
         Command::Print => {
-            merge_args();
-            print!("{}", &m.opts.build());
+            update_rules()?;
+            print!("{}", &loader.get_manager().get_rules().build());
         }
         Command::Enable => {
-            merge_args();
-            m.enable().map_err(|e| e.to_string())?;
-            println!("{}", str_ok);
+            update_rules()?;
+            loader.enable(nsargs.anchor)?;
+            print_ok();
         }
         Command::Disable => {
-            m.disable().map_err(|e| e.to_string())?;
-            println!("{}", str_ok);
+            loader.disable()?;
+            print_ok();
         }
         Command::Load => {
-            m.load().map_err(|e| e.to_string())?;
-            println!("{}", str_ok);
+            loader.load(nsargs.anchor)?;
+            print_ok();
+        }
+        Command::Status => {
+            print_status(&loader.get_status()?);
         }
     }
     Ok(())
