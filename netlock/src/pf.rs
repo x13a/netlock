@@ -551,6 +551,20 @@ impl Default for Multicast {
     }
 }
 
+pub struct PrivateNetworks {
+    pub is_block_out_dns: bool,
+    pub multicast: Multicast,
+}
+
+impl Default for PrivateNetworks {
+    fn default() -> Self {
+        Self {
+            is_block_out_dns: true,
+            multicast: Default::default(),
+        }
+    }
+}
+
 pub enum ICMP {
     Echoreq,
     All,
@@ -570,7 +584,7 @@ pub struct Rules {
     pub outgoing: Action,
     pub is_enable_antispoofing: bool,
     pub is_block_ipv6: bool,
-    pub private_networks: Option<Multicast>,
+    pub private_networks: Option<PrivateNetworks>,
     pub icmp: Option<ICMP>,
     pub skip_interfaces: Vec<String>,
     pub pass_interfaces: Vec<String>,
@@ -657,12 +671,19 @@ impl<'a> Rules {
         if self.is_block_ipv6 {
             writeln!(&mut s, "block {} quick inet6 all", &self.block_policy);
         }
-        if let Some(multicast) = &self.private_networks {
+        if !pass_interfaces.is_empty() {
+            writeln!(
+                &mut s,
+                "pass quick on {{ {} }} all",
+                &pass_interfaces.join(", "),
+            );
+        }
+        if let Some(private_networks) = &self.private_networks {
             let ipv4nrm = gvars::IPV4_NOT_ROUTABLE_MULTICASTS.join(", ");
             let ipv6nrm = gvars::IPV6_NOT_ROUTABLE_MULTICASTS.join(", ");
             let ipv4m: &str;
             let ipv6m: &str;
-            match multicast {
+            match private_networks.multicast {
                 Multicast::NotRoutable => {
                     ipv4m = &ipv4nrm;
                     ipv6m = &ipv6nrm;
@@ -673,6 +694,13 @@ impl<'a> Rules {
                 }
             }
             for addr in &gvars::IPV4_PRIVATE_NETWORKS {
+                if private_networks.is_block_out_dns {
+                    writeln!(
+                        &mut s,
+                        "block {} out quick inet proto {{ tcp, udp }} from {} to {} port domain",
+                        &self.block_policy, addr, addr,
+                    );
+                }
                 writeln!(
                     &mut s,
                     "pass quick inet from {} to {{ {}, {}, {} }}",
@@ -690,6 +718,13 @@ impl<'a> Rules {
                 &ipv4nrm,
             );
             for addr in &gvars::IPV6_PRIVATE_NETWORKS {
+                if private_networks.is_block_out_dns {
+                    writeln!(
+                        &mut s,
+                        "block {} out quick inet6 proto {{ tcp, udp }} from {} to {} port domain",
+                        &self.block_policy, addr, addr,
+                    );
+                }
                 writeln!(
                     &mut s,
                     "pass quick inet6 from {} to {{ {}, {} }}",
@@ -701,13 +736,6 @@ impl<'a> Rules {
                 "pass quick inet6 from {} to {{ {} }}",
                 gvars::IPV6_UNSPECIFIED,
                 &ipv6nrm,
-            );
-        }
-        if !pass_interfaces.is_empty() {
-            writeln!(
-                &mut s,
-                "pass quick on {{ {} }} all",
-                &pass_interfaces.join(", "),
             );
         }
         match self.icmp {
