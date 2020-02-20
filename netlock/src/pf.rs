@@ -552,12 +552,12 @@ impl Default for Multicast {
     }
 }
 
-pub struct PrivateNetworks {
+pub struct Lan {
     pub is_block_out_dns: bool,
     pub multicast: Multicast,
 }
 
-impl Default for PrivateNetworks {
+impl Default for Lan {
     fn default() -> Self {
         Self {
             is_block_out_dns: true,
@@ -585,7 +585,7 @@ pub struct Rules {
     pub outgoing: Action,
     pub is_enable_antispoofing: bool,
     pub is_block_ipv6: bool,
-    pub private_networks: Option<PrivateNetworks>,
+    pub lan: Option<Lan>,
     pub icmp: Option<ICMP>,
     pub skip_interfaces: Vec<String>,
     pub pass_interfaces: Vec<String>,
@@ -679,12 +679,12 @@ impl<'a> Rules {
                 &pass_interfaces.join(", "),
             );
         }
-        if let Some(private_networks) = &self.private_networks {
+        if let Some(lan) = &self.lan {
             let ipv4nrm = gvars::IPV4_NOT_ROUTABLE_MULTICASTS.join(", ");
             let ipv6nrm = gvars::IPV6_NOT_ROUTABLE_MULTICASTS.join(", ");
             let ipv4m: &str;
             let ipv6m: &str;
-            match private_networks.multicast {
+            match lan.multicast {
                 Multicast::NotRoutable => {
                     ipv4m = &ipv4nrm;
                     ipv6m = &ipv6nrm;
@@ -695,7 +695,7 @@ impl<'a> Rules {
                 }
             }
             for addr in &gvars::IPV4_PRIVATE_NETWORKS {
-                if private_networks.is_block_out_dns {
+                if lan.is_block_out_dns {
                     writeln!(
                         &mut s,
                         "block {} out quick inet proto {{ tcp, udp }} from {} to {} port domain",
@@ -719,7 +719,7 @@ impl<'a> Rules {
                 &ipv4nrm,
             );
             for addr in &gvars::IPV6_PRIVATE_NETWORKS {
-                if private_networks.is_block_out_dns {
+                if lan.is_block_out_dns {
                     writeln!(
                         &mut s,
                         "block {} out quick inet6 proto {{ tcp, udp }} from {} to {} port domain",
@@ -776,7 +776,7 @@ impl Default for Rules {
             outgoing: Default::default(),
             is_enable_antispoofing: false,
             is_block_ipv6: false,
-            private_networks: Some(Default::default()),
+            lan: Some(Default::default()),
             icmp: Some(Default::default()),
             skip_interfaces: vec![],
             pass_interfaces: vec![],
