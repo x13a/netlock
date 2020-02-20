@@ -1,8 +1,3 @@
-pub const BROADCAST: &str = "255.255.255.255/32";
-
-pub const IPV4_UNSPECIFIED: &str = "0.0.0.0/32";
-pub const IPV6_UNSPECIFIED: &str = "::/128";
-
 pub const IPV4_MULTICAST: &str = "224.0.0.0/4";
 pub const IPV6_MULTICAST: &str = "ff00::/8";
 

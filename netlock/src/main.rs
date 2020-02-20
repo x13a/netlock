@@ -176,10 +176,10 @@ fn print_status(status: &pf::Status) {
         "\n\
          FIREWALL {}\n\
          NETLOCK  {}*\n",
-        &display_state(status.get_firewall_state()),
-        &display_state(status.get_netlock_state()),
+        &display_state(status.firewall_state()),
+        &display_state(status.netlock_state()),
     );
-    let rules = status.get_rules();
+    let rules = status.rules();
     if !rules.is_empty() {
         let max_len = rules
             .iter()
@@ -300,11 +300,11 @@ fn main() -> MainResult {
     }
     let mut loader = pf::Loader::default();
     let mut update_rules = || -> MainResult {
-        let manager = loader.get_manager();
+        let manager = loader.manager();
         if nsargs.is_skipass_loopback {
             manager.set_skipass_loopback()?;
         }
-        let rules = manager.get_rules();
+        let rules = manager.rules();
         rules.skip_interfaces.extend_from_slice(&nsargs.skip);
         rules.pass_interfaces.extend_from_slice(&nsargs.pass);
         rules.in_destinations.extend_from_slice(&nsargs.in_d);
@@ -315,7 +315,7 @@ fn main() -> MainResult {
     match nsargs.command.expect("nsargs.command is None") {
         Command::Print => {
             update_rules()?;
-            print!("{}", &loader.get_manager().get_rules().build());
+            print!("{}", &loader.manager().rules().build());
         }
         Command::Enable => {
             update_rules()?;

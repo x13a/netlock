@@ -2,6 +2,7 @@ use std::ffi::OsStr;
 use std::fmt::{self, Display, Formatter, Write};
 use std::fs::{create_dir_all, read_to_string, write};
 use std::io;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
@@ -58,7 +59,7 @@ impl<'a> Loader {
         self.manager.get_status()
     }
 
-    pub fn get_manager(&mut self) -> &mut Manager {
+    pub fn manager(&mut self) -> &mut Manager {
         &mut self.manager
     }
 
@@ -137,15 +138,15 @@ pub struct Status {
 }
 
 impl Status {
-    pub fn get_firewall_state(&self) -> bool {
+    pub fn firewall_state(&self) -> bool {
         self.firewall_state
     }
 
-    pub fn get_netlock_state(&self) -> bool {
+    pub fn netlock_state(&self) -> bool {
         self.netlock_state
     }
 
-    pub fn get_rules(&self) -> &[String] {
+    pub fn rules(&self) -> &[String] {
         &self.rules
     }
 }
@@ -205,11 +206,11 @@ impl<'a> Manager {
         })
     }
 
-    pub fn get_state(&self) -> bool {
+    pub fn state(&self) -> bool {
         self.state
     }
 
-    pub fn get_anchor(&self) -> &str {
+    pub fn anchor(&self) -> &str {
         &self.anchor
     }
 
@@ -221,7 +222,7 @@ impl<'a> Manager {
         true
     }
 
-    pub fn get_rules(&mut self) -> &mut Rules {
+    pub fn rules(&mut self) -> &mut Rules {
         &mut self.rules
     }
 
@@ -706,15 +707,15 @@ impl<'a> Rules {
                     "pass quick inet from {} to {{ {}, {}, {} }}",
                     addr,
                     addr,
-                    gvars::BROADCAST,
+                    &Ipv4Addr::BROADCAST,
                     ipv4m,
                 );
             }
             writeln!(
                 &mut s,
                 "pass quick inet from {} to {{ {}, {} }}",
-                gvars::IPV4_UNSPECIFIED,
-                gvars::BROADCAST,
+                &Ipv4Addr::UNSPECIFIED,
+                &Ipv4Addr::BROADCAST,
                 &ipv4nrm,
             );
             for addr in &gvars::IPV6_PRIVATE_NETWORKS {
@@ -734,7 +735,7 @@ impl<'a> Rules {
             writeln!(
                 &mut s,
                 "pass quick inet6 from {} to {{ {} }}",
-                gvars::IPV6_UNSPECIFIED,
+                &Ipv6Addr::UNSPECIFIED,
                 &ipv6nrm,
             );
         }
