@@ -444,7 +444,6 @@ impl<'a> Ctl {
         }
         Ok(self
             .show(ShowModifier::References, "", false)?
-            .to_lowercase()
             .contains(&self.token))
     }
 
