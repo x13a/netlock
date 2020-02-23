@@ -228,18 +228,21 @@ impl<'a> Manager {
 
     pub fn set_skipass_loopback(&mut self) -> ExecResult<()> {
         let loopback_group = "lo".to_string();
-        for interface in self
-            .ctl
-            .show(ShowModifier::Interfaces(&loopback_group), "", false)?
-            .split_whitespace()
-            .map(ToString::to_string)
-        {
-            if !self.rules.pass_interfaces.contains(&interface) {
-                self.rules.pass_interfaces.push(interface);
+        if self.anchor.is_empty() {
+            if !self.rules.skip_interfaces.contains(&loopback_group) {
+                self.rules.skip_interfaces.push(loopback_group);
             }
-        }
-        if !self.rules.skip_interfaces.contains(&loopback_group) {
-            self.rules.skip_interfaces.push(loopback_group);
+        } else {
+            for interface in self
+                .ctl
+                .show(ShowModifier::Interfaces(&loopback_group), "", false)?
+                .split_whitespace()
+                .map(ToString::to_string)
+            {
+                if !self.rules.pass_interfaces.contains(&interface) {
+                    self.rules.pass_interfaces.push(interface);
+                }
+            }
         }
         Ok(())
     }
