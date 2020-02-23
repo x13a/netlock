@@ -639,6 +639,7 @@ pub struct Rules {
     in_table_name: String,
     out_table_name: String,
     pub block_policy: BlockPolicy,
+    pub min_ttl: u8,
     pub incoming: Action,
     pub outgoing: Action,
     pub is_enable_antispoofing: bool,
@@ -704,6 +705,9 @@ impl<'a> Rules {
         writeln!(&mut s, "set block-policy {}", &self.block_policy);
         writeln!(&mut s, "set skip on {{ {} }}", &skip_interfaces.join(", "));
         writeln!(&mut s, "scrub in all");
+        if self.min_ttl > 0 {
+            writeln!(&mut s, "scrub out all min-ttl {}", self.min_ttl);
+        }
         match self.incoming {
             Action::Block => {
                 writeln!(&mut s, "block {} in all", &self.block_policy);
@@ -830,6 +834,7 @@ impl Default for Rules {
             in_table_name: Self::DEFAULT_IN_TABLE_NAME.into(),
             out_table_name: Self::DEFAULT_OUT_TABLE_NAME.into(),
             block_policy: Default::default(),
+            min_ttl: 0,
             incoming: Default::default(),
             outgoing: Default::default(),
             is_enable_antispoofing: false,
