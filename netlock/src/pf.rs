@@ -55,7 +55,7 @@ impl<'a> Loader {
     }
 
     pub fn get_status(&mut self) -> ExecResult<Status> {
-        self.load_settings_conf()?;
+        let _ = self.load_settings_conf();
         self.manager.get_status()
     }
 
@@ -357,6 +357,37 @@ enum LoadFile<'a> {
     Stdin(&'a str),
 }
 
+// enum TableCommand {
+//     Flush,
+//     Add,
+//     Delete,
+//     Replace,
+//     Show,
+//     Test,
+// }
+//
+// impl<'a> TableCommand {
+//     const FLUSH: &'a str = "flush";
+//     const ADD: &'a str = "add";
+//     const DELETE: &'a str = "delete";
+//     const REPLACE: &'a str = "replace";
+//     const SHOW: &'a str = "show";
+//     const TEST: &'a str = "test";
+// }
+//
+// impl Display for TableCommand {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+//         match self {
+//             Self::Flush => write!(f, "{}", Self::FLUSH),
+//             Self::Add => write!(f, "{}", Self::ADD),
+//             Self::Delete => write!(f, "{}", Self::DELETE),
+//             Self::Replace => write!(f, "{}", Self::REPLACE),
+//             Self::Show => write!(f, "{}", Self::SHOW),
+//             Self::Test => write!(f, "{}", Self::TEST),
+//         }
+//     }
+// }
+
 pub struct Ctl {
     ctl_path: PathBuf,
     conf_path: PathBuf,
@@ -378,6 +409,8 @@ impl<'a> Ctl {
     const FLAG_FILE: &'a str = "-f";
     const FLAG_VERBOSE: &'a str = "-v";
     const FLAG_INTERFACE: &'a str = "-i";
+    // const FLAG_TABLE: &'a str = "-t";
+    // const FLAG_TABLE_COMMAND: &'a str = "-T";
 
     pub fn new<P: Into<PathBuf>>(ctl_path: P, conf_path: P) -> Self {
         let ctl_path = ctl_path.into();
@@ -492,6 +525,29 @@ impl<'a> Ctl {
         }
         Ok(String::from_utf8_lossy(&self.exec(&args)?.stdout).into())
     }
+
+    // fn exec_table<S: AsRef<str>>(
+    //     &self,
+    //     table: &str,
+    //     command: TableCommand,
+    //     addresses: &[S],
+    //     anchor: &str,
+    // ) -> ExecResult<Output> {
+    //     let mut args = vec![Self::FLAG_TABLE, table];
+    //     if !anchor.is_empty() {
+    //         args.extend_from_slice(&[Self::FLAG_ANCHOR, anchor]);
+    //     }
+    //     let command = command.to_string();
+    //     args.extend_from_slice(&[Self::FLAG_TABLE_COMMAND, &command]);
+    //     for address in addresses.iter().map(|s| s.as_ref()) {
+    //         if address.starts_with('/') {
+    //             args.extend_from_slice(&[Self::FLAG_FILE, address]);
+    //         } else {
+    //             args.push(address);
+    //         }
+    //     }
+    //     self.exec(&args)
+    // }
 
     fn exec<S: AsRef<OsStr>>(&self, args: &[S]) -> ExecResult<Output> {
         exec(&self.ctl_path, args)
