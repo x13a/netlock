@@ -636,30 +636,34 @@ impl Default for ICMP {
 }
 
 pub struct Rules {
+    block_table_name: String,
     in_table_name: String,
     out_table_name: String,
     pub block_policy: BlockPolicy,
     pub min_ttl: u8,
     pub incoming: Action,
     pub outgoing: Action,
-    pub is_enable_antispoofing: bool,
     pub is_block_ipv6: bool,
+    pub is_enable_antispoofing: bool,
     pub lan: Option<Lan>,
     pub icmp: Option<ICMP>,
     pub skip_interfaces: Vec<String>,
     pub pass_interfaces: Vec<String>,
+    pub block_destinations: Vec<String>,
     pub in_destinations: Vec<String>,
     pub out_destinations: Vec<String>,
 }
 
 impl<'a> Rules {
+    pub const DEFAULT_BLOCK_TABLE_NAME: &'a str = "netlock_block";
     pub const DEFAULT_IN_TABLE_NAME: &'a str = "netlock_pass_in";
     pub const DEFAULT_OUT_TABLE_NAME: &'a str = "netlock_pass_out";
 
     const ANTISPOOFING_SOURCES: [&'a str; 2] = ["no-route", "urpf-failed"];
 
-    pub fn new(in_table_name: &str, out_table_name: &str) -> Self {
+    pub fn new(block_table_name: &str, in_table_name: &str, out_table_name: &str) -> Self {
         Self {
+            block_table_name: block_table_name.into(),
             in_table_name: in_table_name.into(),
             out_table_name: out_table_name.into(),
             ..Default::default()
@@ -700,6 +704,7 @@ impl<'a> Rules {
                 files.join(" "),
             );
         };
+        build_tables(&self.block_table_name, &self.block_destinations);
         build_tables(&self.in_table_name, &self.in_destinations);
         build_tables(&self.out_table_name, &self.out_destinations);
         writeln!(&mut s, "set block-policy {}", &self.block_policy);
@@ -724,15 +729,25 @@ impl<'a> Rules {
                 writeln!(&mut s, "pass out all");
             }
         }
+        if self.is_block_ipv6 {
+            writeln!(&mut s, "block {} quick inet6 all", &self.block_policy);
+        }
+        writeln!(
+            &mut s,
+            "block {} in quick from <{}> to any",
+            &self.block_policy, &self.block_table_name,
+        );
+        writeln!(
+            &mut s,
+            "block {} out quick from any to <{}>",
+            &self.block_policy, &self.block_table_name,
+        );
         if self.is_enable_antispoofing {
             writeln!(
                 &mut s,
                 "block drop in quick from {{ {} }} to any",
                 &Self::ANTISPOOFING_SOURCES.join(", "),
             );
-        }
-        if self.is_block_ipv6 {
-            writeln!(&mut s, "block {} quick inet6 all", &self.block_policy);
         }
         if !pass_interfaces.is_empty() {
             writeln!(
@@ -831,18 +846,20 @@ impl<'a> Rules {
 impl Default for Rules {
     fn default() -> Self {
         Self {
+            block_table_name: Self::DEFAULT_BLOCK_TABLE_NAME.into(),
             in_table_name: Self::DEFAULT_IN_TABLE_NAME.into(),
             out_table_name: Self::DEFAULT_OUT_TABLE_NAME.into(),
             block_policy: Default::default(),
             min_ttl: 0,
             incoming: Default::default(),
             outgoing: Default::default(),
-            is_enable_antispoofing: false,
             is_block_ipv6: false,
+            is_enable_antispoofing: false,
             lan: Some(Default::default()),
             icmp: Some(Default::default()),
             skip_interfaces: vec![],
             pass_interfaces: vec![],
+            block_destinations: vec![],
             in_destinations: vec![],
             out_destinations: vec![],
         }
