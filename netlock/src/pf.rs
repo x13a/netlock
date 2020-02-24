@@ -771,14 +771,23 @@ impl<'a> Rules {
                     ipv6m = gvars::IPV6_MULTICAST;
                 }
             }
-            for addr in &gvars::IPV4_PRIVATE_NETWORKS {
-                if lan.is_block_out_dns {
+            if lan.is_block_out_dns {
+                for addr in &gvars::IPV4_PRIVATE_NETWORKS {
                     writeln!(
                         &mut s,
                         "block {} out quick inet proto {{ tcp, udp }} from {} to {} port domain",
                         &self.block_policy, addr, addr,
                     );
                 }
+                for addr in &gvars::IPV6_PRIVATE_NETWORKS {
+                    writeln!(
+                        &mut s,
+                        "block {} out quick inet6 proto {{ tcp, udp }} from {} to {} port domain",
+                        &self.block_policy, addr, addr,
+                    );
+                }
+            }
+            for addr in &gvars::IPV4_PRIVATE_NETWORKS {
                 writeln!(
                     &mut s,
                     "pass quick inet from {} to {{ {}, {}, {} }}",
@@ -796,13 +805,6 @@ impl<'a> Rules {
                 &ipv4nrm,
             );
             for addr in &gvars::IPV6_PRIVATE_NETWORKS {
-                if lan.is_block_out_dns {
-                    writeln!(
-                        &mut s,
-                        "block {} out quick inet6 proto {{ tcp, udp }} from {} to {} port domain",
-                        &self.block_policy, addr, addr,
-                    );
-                }
                 writeln!(
                     &mut s,
                     "pass quick inet6 from {} to {{ {}, {} }}",
