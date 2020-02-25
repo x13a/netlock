@@ -164,7 +164,7 @@ impl Display for Color<'_> {
     }
 }
 
-fn print_status(status: &pf::Status) {
+fn process_status(status: &pf::Status) -> Result<(), String> {
     let display_state = |v: bool| {
         if v {
             Color::Green("ENABLED")
@@ -172,12 +172,14 @@ fn print_status(status: &pf::Status) {
             Color::Red("DISABLED")
         }
     };
+    let firewall_state = status.firewall_state();
+    let netlock_state = status.netlock_state();
     println!(
         "\n\
          FIREWALL {}\n\
          NETLOCK  {}*\n",
-        &display_state(status.firewall_state()),
-        &display_state(status.netlock_state()),
+        &display_state(firewall_state),
+        &display_state(netlock_state),
     );
     let rules = status.rules();
     if !rules.is_empty() {
@@ -195,6 +197,13 @@ fn print_status(status: &pf::Status) {
         }
         println!();
     }
+    if !firewall_state || !netlock_state {
+        return Err(format!(
+            "firewall: `{}`, netlock: `{}`",
+            firewall_state, netlock_state,
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -331,7 +340,7 @@ fn main() -> MainResult {
             print_ok();
         }
         Command::Status => {
-            print_status(&loader.get_status()?);
+            process_status(&loader.get_status()?)?;
         }
     }
     Ok(())
