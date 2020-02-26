@@ -178,8 +178,8 @@ fn process_status(status: &pf::Status) -> Result<(), String> {
     let netlock_state = status.netlock_state();
     println!(
         "\n\
-         {: <width$}{}\n\
-         {: <width$}{}*\n",
+         {:width$}{}\n\
+         {:width$}{}*\n",
         &firewall.to_uppercase(),
         &display_state(firewall_state),
         &netlock.to_uppercase(),
