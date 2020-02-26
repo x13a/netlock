@@ -186,7 +186,7 @@ fn process_status(status: &pf::Status) -> Result<(), String> {
         let max_len = rules
             .iter()
             .flat_map(|s| s.lines())
-            .map(|s| s.len())
+            .map(|s| s.chars().count())
             .max()
             .unwrap_or(0);
         let print_sep = || println!("{}", "-".repeat(max_len));
