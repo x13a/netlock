@@ -735,13 +735,10 @@ impl<'a> Rules {
         if self.min_ttl > 0 {
             writeln!(&mut s, "scrub out all min-ttl {}", self.min_ttl);
         }
+        let log = if self.is_enable_log { "log" } else { "" };
         match self.incoming {
             Action::Block => {
-                if self.is_enable_log {
-                    writeln!(&mut s, "block {} in log all", &self.block_policy);
-                } else {
-                    writeln!(&mut s, "block {} in all", &self.block_policy);
-                }
+                writeln!(&mut s, "block {} in {} all", &self.block_policy, log);
             }
             Action::Pass => {
                 writeln!(&mut s, "pass in all");
@@ -749,11 +746,7 @@ impl<'a> Rules {
         }
         match self.outgoing {
             Action::Block => {
-                if self.is_enable_log {
-                    writeln!(&mut s, "block {} out log all", &self.block_policy);
-                } else {
-                    writeln!(&mut s, "block {} out all", &self.block_policy);
-                }
+                writeln!(&mut s, "block {} out {} all", &self.block_policy, log);
             }
             Action::Pass => {
                 writeln!(&mut s, "pass out all");
@@ -773,19 +766,11 @@ impl<'a> Rules {
             &self.block_policy, &self.block_table_name,
         );
         if let Some(antispoofing) = &self.antispoofing {
-            if self.is_enable_log {
-                writeln!(
-                    &mut s,
-                    "block drop in log quick from {{ {} }} to any",
-                    antispoofing,
-                );
-            } else {
-                writeln!(
-                    &mut s,
-                    "block drop in quick from {{ {} }} to any",
-                    antispoofing,
-                );
-            }
+            writeln!(
+                &mut s,
+                "block drop in {} quick from {{ {} }} to any",
+                log, antispoofing,
+            );
         }
         if !pass_interfaces.is_empty() {
             writeln!(
