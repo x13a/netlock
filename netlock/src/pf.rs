@@ -833,7 +833,7 @@ impl<'a> Rules {
             }
             writeln!(
                 &mut s,
-                "pass quick inet6 from {} to {{ {} }}",
+                "pass quick inet6 from {} to {}",
                 &Ipv6Addr::UNSPECIFIED,
                 &ipv6nrm,
             );
