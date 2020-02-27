@@ -599,6 +599,29 @@ impl Default for Action {
     }
 }
 
+pub enum Antispoofing {
+    All,
+}
+
+impl<'a> Antispoofing {
+    const NO_ROUTE: &'a str = "no-route";
+    const URPF_FAILED: &'a str = "urpf-failed";
+}
+
+impl Display for Antispoofing {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::All => write!(f, "{}", &[Self::NO_ROUTE, Self::URPF_FAILED].join(", ")),
+        }
+    }
+}
+
+impl Default for Antispoofing {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
 pub enum Multicast {
     NotRoutable,
     All,
@@ -641,10 +664,11 @@ pub struct Rules {
     out_table_name: String,
     pub block_policy: BlockPolicy,
     pub min_ttl: u8,
+    pub is_enable_log: bool,
     pub incoming: Action,
     pub outgoing: Action,
     pub is_block_ipv6: bool,
-    pub is_enable_antispoofing: bool,
+    pub antispoofing: Option<Antispoofing>,
     pub lan: Option<Lan>,
     pub icmp: Option<ICMP>,
     pub skip_interfaces: Vec<String>,
@@ -658,8 +682,6 @@ impl<'a> Rules {
     pub const DEFAULT_BLOCK_TABLE_NAME: &'a str = "netlock_block";
     pub const DEFAULT_IN_TABLE_NAME: &'a str = "netlock_pass_in";
     pub const DEFAULT_OUT_TABLE_NAME: &'a str = "netlock_pass_out";
-
-    const ANTISPOOFING_SOURCES: [&'a str; 2] = ["no-route", "urpf-failed"];
 
     pub fn new(block_table_name: &str, in_table_name: &str, out_table_name: &str) -> Self {
         Self {
@@ -715,7 +737,11 @@ impl<'a> Rules {
         }
         match self.incoming {
             Action::Block => {
-                writeln!(&mut s, "block {} in all", &self.block_policy);
+                if self.is_enable_log {
+                    writeln!(&mut s, "block {} in log all", &self.block_policy);
+                } else {
+                    writeln!(&mut s, "block {} in all", &self.block_policy);
+                }
             }
             Action::Pass => {
                 writeln!(&mut s, "pass in all");
@@ -723,7 +749,11 @@ impl<'a> Rules {
         }
         match self.outgoing {
             Action::Block => {
-                writeln!(&mut s, "block {} out all", &self.block_policy);
+                if self.is_enable_log {
+                    writeln!(&mut s, "block {} out log all", &self.block_policy);
+                } else {
+                    writeln!(&mut s, "block {} out all", &self.block_policy);
+                }
             }
             Action::Pass => {
                 writeln!(&mut s, "pass out all");
@@ -742,12 +772,20 @@ impl<'a> Rules {
             "block {} out quick from any to <{}>",
             &self.block_policy, &self.block_table_name,
         );
-        if self.is_enable_antispoofing {
-            writeln!(
-                &mut s,
-                "block drop in quick from {{ {} }} to any",
-                &Self::ANTISPOOFING_SOURCES.join(", "),
-            );
+        if let Some(antispoofing) = &self.antispoofing {
+            if self.is_enable_log {
+                writeln!(
+                    &mut s,
+                    "block drop in log quick from {{ {} }} to any",
+                    antispoofing,
+                );
+            } else {
+                writeln!(
+                    &mut s,
+                    "block drop in quick from {{ {} }} to any",
+                    antispoofing,
+                );
+            }
         }
         if !pass_interfaces.is_empty() {
             writeln!(
@@ -853,10 +891,11 @@ impl Default for Rules {
             out_table_name: Self::DEFAULT_OUT_TABLE_NAME.into(),
             block_policy: Default::default(),
             min_ttl: 0,
+            is_enable_log: false,
             incoming: Default::default(),
             outgoing: Default::default(),
             is_block_ipv6: false,
-            is_enable_antispoofing: false,
+            antispoofing: None,
             lan: Some(Default::default()),
             icmp: Some(Default::default()),
             skip_interfaces: vec![],
