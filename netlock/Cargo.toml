@@ -1,6 +1,6 @@
 [package]
 name = "netlock"
-version = "0.0.27"
+version = "0.0.26"
 authors = ["lucky"]
 edition = "2018"
 
