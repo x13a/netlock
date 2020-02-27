@@ -795,20 +795,17 @@ impl<'a> Rules {
                 }
             }
             if lan.is_block_out_dns {
-                for addr in &gvars::IPV4_PRIVATE_NETWORKS {
-                    writeln!(
-                        &mut s,
-                        "block {} out quick inet proto {{ tcp, udp }} from {} to {} port domain",
-                        &self.block_policy, addr, addr,
-                    );
-                }
-                for addr in &gvars::IPV6_PRIVATE_NETWORKS {
-                    writeln!(
-                        &mut s,
-                        "block {} out quick inet6 proto {{ tcp, udp }} from {} to {} port domain",
-                        &self.block_policy, addr, addr,
-                    );
-                }
+                let mut block_out_dns = |af: &str, addrs: &[&str]| {
+                    for &addr in addrs {
+                        writeln!(
+                            &mut s,
+                            "block {} out quick {} proto {{ tcp, udp }} from {} to {} port domain",
+                            &self.block_policy, af, addr, addr,
+                        );
+                    }
+                };
+                block_out_dns("inet", &gvars::IPV4_PRIVATE_NETWORKS);
+                block_out_dns("inet6", &gvars::IPV6_PRIVATE_NETWORKS);
             }
             for addr in &gvars::IPV4_PRIVATE_NETWORKS {
                 writeln!(
@@ -843,11 +840,16 @@ impl<'a> Rules {
         }
         match self.icmp {
             Some(ICMP::Echoreq) => {
-                writeln!(&mut s, "pass quick inet proto icmp all icmp-type echoreq");
-                writeln!(
-                    &mut s,
-                    "pass quick inet6 proto icmp6 all icmp6-type echoreq",
-                );
+                for (af, proto, icmp_type) in &[
+                    ("inet", "icmp", "icmp-type"),
+                    ("inet6", "icmp6", "icmp6-type"),
+                ] {
+                    writeln!(
+                        &mut s,
+                        "pass quick {} proto {} all {} echoreq",
+                        af, proto, icmp_type,
+                    );
+                }
             }
             Some(ICMP::All) => {
                 writeln!(&mut s, "pass quick proto {{ icmp, icmp6 }} all");
