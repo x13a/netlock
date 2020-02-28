@@ -340,16 +340,22 @@ impl Display for ShowModifier<'_> {
 }
 
 enum FlushModifier {
+    Rules,
+    Tables,
     All,
 }
 
 impl<'a> FlushModifier {
+    const RULES: &'a str = "rules";
+    const TABLES: &'a str = "Tables";
     const ALL: &'a str = "all";
 }
 
 impl Display for FlushModifier {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Rules => write!(f, "{}", Self::RULES),
+            Self::Tables => write!(f, "{}", Self::TABLES),
             Self::All => write!(f, "{}", Self::ALL),
         }
     }
@@ -600,6 +606,8 @@ impl Default for Action {
 }
 
 pub enum Antispoofing {
+    NoRoute,
+    UrpfFailed,
     All,
 }
 
@@ -611,6 +619,8 @@ impl<'a> Antispoofing {
 impl Display for Antispoofing {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NoRoute => write!(f, "{}", Self::NO_ROUTE),
+            Self::UrpfFailed => write!(f, "{}", Self::URPF_FAILED),
             Self::All => write!(f, "{}", &[Self::NO_ROUTE, Self::URPF_FAILED].join(", ")),
         }
     }
