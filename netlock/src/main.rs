@@ -1,6 +1,7 @@
 use std::env::args;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::num::ParseIntError;
 use std::path::Path;
 use std::slice::Iter;
 use std::str::FromStr;
@@ -8,23 +9,30 @@ use std::str::FromStr;
 use netlock::pf;
 
 mod flag {
-    pub const HELP: &str = "-h";
-    pub const VERSION: &str = "-V";
-    pub const SKIPASS_LOOPBACK: &str = "-l";
-    pub const ANCHOR: &str = "-a";
-    pub const SKIP: &str = "-s";
-    pub const PASS: &str = "-p";
-    pub const IN: &str = "-i";
-    pub const OUT: &str = "-o";
-    pub const PRINT: &str = "-P";
-    pub const ENABLE: &str = "-E";
-    pub const DISABLE: &str = "-D";
-    pub const LOAD: &str = "-L";
-    pub const STATUS: &str = "-S";
+    pub const HELP: &str = "h";
+    pub const VERSION: &str = "V";
+    pub const VERBOSE: &str = "v";
+    pub const SKIPASS_LOOPBACK: &str = "0";
+    pub const BLOCK_IPV6: &str = "6";
+    pub const NO_LAN: &str = "l";
+    pub const USE_ROUTING: &str = "r";
+    pub const ANCHOR: &str = "a";
+    pub const MINIMUM_TTL: &str = "t";
+    pub const BLOCK: &str = "b";
+    pub const SKIP: &str = "s";
+    pub const PASS: &str = "p";
+    pub const IN: &str = "i";
+    pub const OUT: &str = "o";
+    pub const PRINT: &str = "P";
+    pub const ENABLE: &str = "E";
+    pub const DISABLE: &str = "D";
+    pub const LOAD: &str = "L";
+    pub const STATUS: &str = "S";
 }
 
 mod metavar {
     pub const ANCHOR: &str = "ANCHOR";
+    pub const TTL: &str = "TTL";
     pub const INTERFACE: &str = "INTERFACE";
     pub const DESTINATION: &str = "DESTINATION";
 }
@@ -101,22 +109,32 @@ enum PrintDestination {
 }
 
 fn print_usage(to: PrintDestination) {
+    let destination_help = "( ip | hostname | filepath )";
+    let pass_help_interface = "tun0";
     let usage = format!(
-        "{} [{h}] [{v}] [{l}] [{a} <{A}>] [.. {s} <{I}>] [.. {p} <{I}>]\n\
-         \t[.. {i} <{D}>] [.. {o} <{D}>] {{ {} }}\n\n\
-         [{h}] * Print help and exit\n\
-         [{v}] * Print version and exit\n\n\
-         [{l}] * Skipass on loopback\n\
-         [{s}] * Skip on <{I}>\n\
-         [{p}] * Pass on <{I}>\n\
-         [{i}] * Pass in from <{D}> (can be filepath)\n\
-         [{o}] * Pass out to <{D}> (can be filepath)\n\
-         [{a}] * Use <{A}> (`{}` will be replaced to `{}`)\n\n\
-         [{}] * Print rules and exit\n\
-         [{}] * Enable lock\n\
-         [{}] * Disable lock\n\
-         [{}] * Load lock\n\
-         [{}] * Show status",
+        "{} [-{h}{V}{v}{O}{r}{q}{l}] [-{a} <{A}>] [-{t} <{T}>]\n\
+         \t[.. -{s} <{I}>] [.. -{p} <{I}>]\n\
+         \t[.. -{b} <{D}>] [.. -{i} <{D}>] [.. -{o} <{D}>]\n\
+         \t-{{ {} }}\n\n\
+         [-{h}] * Print help and exit\n\
+         [-{V}] * Print version and exit\n\n\
+         [-{v}] * Enable firewall logging\n\
+         [-{O}] * Skipass on loopback\n\
+         [-{r}] * Extend interface and destination from routing table\n\
+         [-{q}] * Block IPv6\n\
+         [-{l}] * No lan\n\
+         [-{a}] * Use <{A}> (`{}` will be replaced with `{}`)\n\
+         [-{t}] * Minimum <{T}>\n\
+         [-{s}] * Skip on <{I}>\n\
+         [-{p}] * Pass on <{I}> (can specify direction: `<{PH}` - in, `>{PH}` - out)\n\
+         [-{b}] * Block <{D}> {DH}\n\
+         [-{i}] * Pass in from <{D}> {DH}\n\
+         [-{o}] * Pass out to <{D}> {DH}\n\n\
+         [-{}] * Print rules and exit\n\
+         [-{}] * Enable lock\n\
+         [-{}] * Disable lock\n\
+         [-{}] * Load lock\n\
+         [-{}] * Show status",
         &get_prog_name(),
         &collect_to_string(Command::iter()),
         &pf::Manager::ANCHOR_REPLACE_FROM,
@@ -127,16 +145,25 @@ fn print_usage(to: PrintDestination) {
         &Command::Load.to_string(),
         &Command::Status.to_string(),
         h = flag::HELP,
-        v = flag::VERSION,
-        l = flag::SKIPASS_LOOPBACK,
+        V = flag::VERSION,
+        v = flag::VERBOSE,
+        O = flag::SKIPASS_LOOPBACK,
+        r = flag::USE_ROUTING,
+        q = flag::BLOCK_IPV6,
+        l = flag::NO_LAN,
         a = flag::ANCHOR,
+        t = flag::MINIMUM_TTL,
         s = flag::SKIP,
         p = flag::PASS,
+        b = flag::BLOCK,
         i = flag::IN,
         o = flag::OUT,
         A = metavar::ANCHOR,
+        T = metavar::TTL,
         I = metavar::INTERFACE,
         D = metavar::DESTINATION,
+        PH = pass_help_interface,
+        DH = destination_help,
     );
     match to {
         PrintDestination::Stdout => println!("{}", &usage),
@@ -215,11 +242,17 @@ fn process_status(status: &pf::Status) -> Result<(), String> {
 struct NSArgs {
     is_help: bool,
     is_version: bool,
+    is_verbose: bool,
     is_skipass_loopback: bool,
+    is_use_routing: bool,
+    is_block_ipv6: bool,
+    is_no_lan: bool,
     anchor: Option<String>,
+    min_ttl: u8,
     command: Option<Command>,
     skip: Vec<String>,
-    pass: Vec<String>,
+    pass: Vec<pf::PassInterface>,
+    block: Vec<String>,
     in_d: Vec<String>,
     out_d: Vec<String>,
 }
@@ -235,63 +268,86 @@ fn parse_args() -> Result<NSArgs, String> {
     let mut idx = 1;
     let err_missing_arg = |s: &str| Err(format!("Missing argument: {}", s));
     while idx < argc {
-        let arg = argv[idx].as_str();
+        let arg = &argv[idx];
+        if !arg.starts_with('-') {
+            return Err(format!("Invalid argument: `{}`", arg));
+        }
         idx += 1;
-        match arg {
-            flag::HELP => {
-                nsargs.is_help = true;
-                return Ok(nsargs);
-            }
-            flag::VERSION => {
-                nsargs.is_version = true;
-                return Ok(nsargs);
-            }
-            flag::SKIPASS_LOOPBACK => nsargs.is_skipass_loopback = true,
-            flag::SKIP => match argv.get(idx) {
-                Some(s) => {
-                    nsargs.skip.push(s.into());
-                    idx += 1;
+        for sub_arg in arg.chars().skip(1).map(|c| c.to_string()) {
+            match sub_arg.as_str() {
+                flag::HELP => {
+                    nsargs.is_help = true;
+                    return Ok(nsargs);
                 }
-                _ => return err_missing_arg(metavar::INTERFACE),
-            },
-            flag::PASS => match argv.get(idx) {
-                Some(s) => {
-                    nsargs.pass.push(s.into());
-                    idx += 1;
+                flag::VERSION => {
+                    nsargs.is_version = true;
+                    return Ok(nsargs);
                 }
-                _ => return err_missing_arg(metavar::INTERFACE),
-            },
-            flag::IN => match argv.get(idx) {
-                Some(s) => {
-                    nsargs.in_d.push(s.into());
-                    idx += 1;
-                }
-                _ => return err_missing_arg(metavar::DESTINATION),
-            },
-            flag::OUT => match argv.get(idx) {
-                Some(s) => {
-                    nsargs.out_d.push(s.into());
-                    idx += 1;
-                }
-                _ => return err_missing_arg(metavar::DESTINATION),
-            },
-            flag::ANCHOR => match argv.get(idx) {
-                Some(s) => {
-                    nsargs.anchor = Some(s.into());
-                    idx += 1;
-                }
-                _ => return err_missing_arg(metavar::ANCHOR),
-            },
-            s => match Command::from_str(s) {
-                Ok(cmd) => {
-                    nsargs.command = Some(cmd);
-                    match cmd {
-                        Command::Disable | Command::Status => break,
-                        _ => {}
+                flag::VERBOSE => nsargs.is_verbose = true,
+                flag::SKIPASS_LOOPBACK => nsargs.is_skipass_loopback = true,
+                flag::USE_ROUTING => nsargs.is_use_routing = true,
+                flag::BLOCK_IPV6 => nsargs.is_block_ipv6 = true,
+                flag::NO_LAN => nsargs.is_no_lan = true,
+                flag::ANCHOR => match argv.get(idx) {
+                    Some(s) => {
+                        nsargs.anchor = Some(s.into());
+                        idx += 1;
                     }
-                }
-                _ => return Err(format!("Invalid argument: `{}`", arg)),
-            },
+                    _ => return err_missing_arg(metavar::ANCHOR),
+                },
+                flag::MINIMUM_TTL => match argv.get(idx) {
+                    Some(s) => {
+                        nsargs.min_ttl = s.parse().map_err(|e: ParseIntError| e.to_string())?;
+                        idx += 1;
+                    }
+                    _ => return err_missing_arg(metavar::TTL),
+                },
+                flag::SKIP => match argv.get(idx) {
+                    Some(s) => {
+                        nsargs.skip.push(s.into());
+                        idx += 1;
+                    }
+                    _ => return err_missing_arg(metavar::INTERFACE),
+                },
+                flag::PASS => match argv.get(idx) {
+                    Some(s) => {
+                        nsargs.pass.push(s.into());
+                        idx += 1;
+                    }
+                    _ => return err_missing_arg(metavar::INTERFACE),
+                },
+                flag::BLOCK => match argv.get(idx) {
+                    Some(s) => {
+                        nsargs.block.push(s.into());
+                        idx += 1;
+                    }
+                    _ => return err_missing_arg(metavar::DESTINATION),
+                },
+                flag::IN => match argv.get(idx) {
+                    Some(s) => {
+                        nsargs.in_d.push(s.into());
+                        idx += 1;
+                    }
+                    _ => return err_missing_arg(metavar::DESTINATION),
+                },
+                flag::OUT => match argv.get(idx) {
+                    Some(s) => {
+                        nsargs.out_d.push(s.into());
+                        idx += 1;
+                    }
+                    _ => return err_missing_arg(metavar::DESTINATION),
+                },
+                s => match Command::from_str(s) {
+                    Ok(cmd) => {
+                        nsargs.command = Some(cmd);
+                        match cmd {
+                            Command::Disable | Command::Status => return Ok(nsargs),
+                            _ => {}
+                        }
+                    }
+                    _ => return Err(format!("Invalid argument: `{}`", arg)),
+                },
+            }
         }
     }
     if nsargs.command.is_some() {
@@ -316,11 +372,24 @@ fn main() -> MainResult {
     let mut update_rules = || -> MainResult {
         let manager = loader.manager();
         if nsargs.is_skipass_loopback {
+            if let Some(anchor) = &nsargs.anchor {
+                manager.set_anchor(anchor);
+            }
             manager.set_skipass_loopback()?;
         }
+        if nsargs.is_use_routing {
+            manager.extend_rules_from_routing_table()?;
+        }
         let rules = manager.rules();
+        rules.min_ttl = nsargs.min_ttl;
+        rules.is_enable_log = nsargs.is_verbose;
+        rules.is_block_ipv6 = nsargs.is_block_ipv6;
+        if nsargs.is_no_lan {
+            rules.lan = None;
+        }
         rules.skip_interfaces.extend_from_slice(&nsargs.skip);
         rules.pass_interfaces.extend_from_slice(&nsargs.pass);
+        rules.block_destinations.extend_from_slice(&nsargs.block);
         rules.in_destinations.extend_from_slice(&nsargs.in_d);
         rules.out_destinations.extend_from_slice(&nsargs.out_d);
         Ok(())

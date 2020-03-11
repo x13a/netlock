@@ -154,7 +154,3 @@ pub fn time() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
-
-pub fn is_osx() -> bool {
-    cfg!(target_os = "macos")
-}

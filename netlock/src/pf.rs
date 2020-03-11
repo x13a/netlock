@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use crate::gvars;
+use crate::tools::get_useful_routing_table_info;
 use crate::utils::{
-    clear_go_permissions, exec, exec_stdin, is_osx, time, ExecResult, ExpandUser, IsExecutable,
+    clear_go_permissions, exec, exec_stdin, time, ExecResult, ExpandUser, IsExecutable,
 };
 
 pub struct Loader {
@@ -20,7 +21,9 @@ impl<'a> Loader {
     const SETTINGS_SEP: char = ':';
     const SETTINGS_MANAGER_STATE: &'a str = "MANAGER_STATE";
     const SETTINGS_MANAGER_ANCHOR: &'a str = "MANAGER_ANCHOR";
+    #[cfg(not(target_os = "macos"))]
     const SETTINGS_CTL_STATE: &'a str = "CTL_STATE";
+    #[cfg(target_os = "macos")]
     const SETTINGS_CTL_TOKEN: &'a str = "CTL_TOKEN";
 
     pub fn new(conf_dir: impl Into<PathBuf>, manager: Manager) -> Self {
@@ -31,8 +34,10 @@ impl<'a> Loader {
 
     pub fn enable(&mut self, anchor: Option<String>) -> ExecResult<()> {
         let _ = self.load_settings_conf();
-        self.manager.enable(None, anchor.as_deref())?;
-        self.make_firewall_conf()?;
+        let rules = &self.manager.rules.build();
+        self.manager
+            .load(LoadFile::Stdin(rules), anchor.as_deref())?;
+        self.make_firewall_conf(Some(rules))?;
         self.make_settings_conf()?;
         Ok(())
     }
@@ -63,10 +68,13 @@ impl<'a> Loader {
         &mut self.manager
     }
 
-    fn make_firewall_conf(&self) -> io::Result<()> {
+    fn make_firewall_conf(&self, content: Option<&str>) -> io::Result<()> {
         create_dir_all(&self.conf_dir)?;
         let conf_path = &self.get_firewall_conf_path();
-        write(conf_path, &self.manager.rules.build())?;
+        match content {
+            Some(s) => write(conf_path, s)?,
+            _ => write(conf_path, &self.manager.rules.build())?,
+        }
         clear_go_permissions(conf_path)
     }
 
@@ -81,10 +89,12 @@ impl<'a> Loader {
                     &self.manager.state.to_string(),
                 ),
                 (Self::SETTINGS_MANAGER_ANCHOR, &self.manager.anchor),
+                #[cfg(not(target_os = "macos"))]
                 (
                     Self::SETTINGS_CTL_STATE,
                     &self.manager.ctl.state.to_string(),
                 ),
+                #[cfg(target_os = "macos")]
                 (Self::SETTINGS_CTL_TOKEN, &self.manager.ctl.token),
             ]
             .iter()
@@ -106,9 +116,11 @@ impl<'a> Loader {
                     self.manager.state = opts[1].parse().unwrap_or(self.manager.state)
                 }
                 Self::SETTINGS_MANAGER_ANCHOR => self.manager.anchor = opts[1].into(),
+                #[cfg(not(target_os = "macos"))]
                 Self::SETTINGS_CTL_STATE => {
                     self.manager.ctl.state = opts[1].parse().unwrap_or(self.manager.ctl.state);
                 }
+                #[cfg(target_os = "macos")]
                 Self::SETTINGS_CTL_TOKEN => self.manager.ctl.token = opts[1].into(),
                 _ => {}
             }
@@ -171,11 +183,8 @@ impl<'a> Manager {
         }
     }
 
-    pub fn enable(&mut self, rules: Option<&Rules>, new_anchor: Option<&str>) -> ExecResult<()> {
-        self.load(
-            LoadFile::Stdin(&rules.unwrap_or(&self.rules).build()),
-            new_anchor,
-        )
+    pub fn enable(&mut self, new_anchor: Option<&str>) -> ExecResult<()> {
+        self.load(LoadFile::Stdin(&self.rules.build()), new_anchor)
     }
 
     pub fn disable(&mut self) -> ExecResult<()> {
@@ -235,14 +244,32 @@ impl<'a> Manager {
         } else {
             for interface in self
                 .ctl
-                .show(ShowModifier::Interfaces(&loopback_group), "", false)?
-                .split_whitespace()
-                .map(ToString::to_string)
+                .show(ShowModifier::Interfaces(&loopback_group), "", true)?
+                .lines()
+                .map(|s| s.split_whitespace().collect::<Vec<_>>())
+                .filter(|v| v.len() == 1) // v[1] == "(skip)"
+                .map(|v| PassInterface::new(v[0]))
             {
                 if !self.rules.pass_interfaces.contains(&interface) {
                     self.rules.pass_interfaces.push(interface);
                 }
             }
+        }
+        Ok(())
+    }
+
+    pub fn extend_rules_from_routing_table(&mut self) -> ExecResult<()> {
+        let info = get_useful_routing_table_info()?;
+        let interface = info.interface();
+        if !interface.is_empty() {
+            let pass_interface = PassInterface::new(interface).to_out();
+            if !self.rules.pass_interfaces.contains(&pass_interface) {
+                self.rules.pass_interfaces.push(pass_interface);
+            }
+        }
+        let destination = info.destination().to_string();
+        if !destination.is_empty() && !self.rules.out_destinations.contains(&destination) {
+            self.rules.out_destinations.push(destination);
         }
         Ok(())
     }
@@ -277,26 +304,34 @@ impl<'a> Manager {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn enable_firewall(&mut self) -> ExecResult<()> {
-        if is_osx() {
-            if !self.ctl.check_token()? {
-                self.ctl.acquire()?;
-            }
-        } else if !self.ctl.is_enabled()? {
+        if !self.ctl.is_enabled()? {
             self.ctl.enable()?;
         }
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
+    fn enable_firewall(&mut self) -> ExecResult<()> {
+        if !self.ctl.check_token()? {
+            self.ctl.enable()?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
     fn disable_firewall(&mut self) -> ExecResult<()> {
-        if self.ctl.is_enabled()? {
-            if is_osx() {
-                if self.ctl.check_token()? {
-                    self.ctl.release()?;
-                }
-            } else if self.ctl.state {
-                self.ctl.disable()?;
-            }
+        if self.ctl.state && self.ctl.is_enabled()? {
+            self.ctl.disable()?;
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn disable_firewall(&mut self) -> ExecResult<()> {
+        if self.ctl.check_token()? {
+            self.ctl.disable()?;
         }
         Ok(())
     }
@@ -311,8 +346,10 @@ impl Default for Manager {
 enum ShowModifier<'a> {
     Rules,
     Anchors,
+    States,
     Info,
     References,
+    Labels,
     Tables,
     Interfaces(&'a str),
 }
@@ -320,8 +357,10 @@ enum ShowModifier<'a> {
 impl<'a> ShowModifier<'_> {
     const RULES: &'a str = "rules";
     const ANCHORS: &'a str = "Anchors";
+    const STATES: &'a str = "states";
     const INFO: &'a str = "info";
     const REFERENCES: &'a str = "References";
+    const LABELS: &'a str = "labels";
     const TABLES: &'a str = "Tables";
     const INTERFACES: &'a str = "Interfaces";
 }
@@ -331,8 +370,10 @@ impl Display for ShowModifier<'_> {
         match self {
             Self::Rules => write!(f, "{}", Self::RULES),
             Self::Anchors => write!(f, "{}", Self::ANCHORS),
+            Self::States => write!(f, "{}", Self::STATES),
             Self::Info => write!(f, "{}", Self::INFO),
             Self::References => write!(f, "{}", Self::REFERENCES),
+            Self::Labels => write!(f, "{}", Self::LABELS),
             Self::Tables => write!(f, "{}", Self::TABLES),
             Self::Interfaces(_) => write!(f, "{}", Self::INTERFACES),
         }
@@ -400,7 +441,9 @@ enum LoadFile<'a> {
 pub struct Ctl {
     ctl_path: PathBuf,
     conf_path: PathBuf,
+    #[cfg(not(target_os = "macos"))]
     state: bool,
+    #[cfg(target_os = "macos")]
     token: String,
 }
 
@@ -408,10 +451,14 @@ impl<'a> Ctl {
     pub const DEFAULT_CTL_PATH: &'a str = "/sbin/pfctl";
     pub const DEFAULT_CONF_PATH: &'a str = "/etc/pf.conf";
 
+    #[cfg(not(target_os = "macos"))]
     const FLAG_ENABLE: &'a str = "-e";
+    #[cfg(target_os = "macos")]
+    const FLAG_ENABLE: &'a str = "-E";
+    #[cfg(not(target_os = "macos"))]
     const FLAG_DISABLE: &'a str = "-d";
-    const FLAG_ACQUIRE: &'a str = "-E";
-    const FLAG_RELEASE: &'a str = "-X";
+    #[cfg(target_os = "macos")]
+    const FLAG_DISABLE: &'a str = "-X";
     const FLAG_SHOW: &'a str = "-s";
     const FLAG_ANCHOR: &'a str = "-a";
     const FLAG_FLUSH: &'a str = "-F";
@@ -429,44 +476,49 @@ impl<'a> Ctl {
         Self {
             ctl_path,
             conf_path,
+            #[cfg(not(target_os = "macos"))]
             state: false,
+            #[cfg(target_os = "macos")]
             token: "".into(),
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn enable(&mut self) -> ExecResult<()> {
         self.exec(&[Self::FLAG_ENABLE])?;
         self.state = true;
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
+    fn enable(&mut self) -> ExecResult<()> {
+        let mut token = String::new();
+        for arr in String::from_utf8_lossy(&self.exec(&[Self::FLAG_ENABLE])?.stderr)
+            .to_lowercase()
+            .lines()
+            .filter(|&s| s.contains("token :"))
+            .map(|s| s.split(':').collect::<Vec<_>>())
+        {
+            token = arr[1].trim().into();
+            break;
+        }
+        assert!(!token.is_empty() && token.chars().all(|c| c.is_ascii_digit()));
+        self.token = token;
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
     fn disable(&mut self) -> ExecResult<()> {
         self.exec(&[Self::FLAG_DISABLE])?;
         self.state = false;
         Ok(())
     }
 
-    fn acquire(&mut self) -> ExecResult<()> {
-        let stderr =
-            String::from_utf8_lossy(&self.exec(&[Self::FLAG_ACQUIRE])?.stderr).to_lowercase();
-        let mut token = "";
-        for arr in stderr
-            .lines()
-            .filter(|&s| s.contains("token :"))
-            .map(|s| s.split(':').collect::<Vec<_>>())
-        {
-            token = arr[1].trim();
-            break;
-        }
-        assert!(!token.is_empty() && token.chars().all(|c| c.is_ascii_digit()));
-        self.token = token.into();
-        Ok(())
-    }
-
-    fn release(&mut self) -> ExecResult<bool> {
+    #[cfg(target_os = "macos")]
+    fn disable(&mut self) -> ExecResult<bool> {
         assert!(!self.token.is_empty());
         let is_disabled =
-            String::from_utf8_lossy(&self.exec(&[Self::FLAG_RELEASE, &self.token])?.stderr)
+            String::from_utf8_lossy(&self.exec(&[Self::FLAG_DISABLE, &self.token])?.stderr)
                 .to_lowercase()
                 .contains("pf disabled");
         self.token.clear();
@@ -480,6 +532,7 @@ impl<'a> Ctl {
             .contains("status: enabled"))
     }
 
+    #[cfg(target_os = "macos")]
     fn check_token(&self) -> ExecResult<bool> {
         if self.token.is_empty() {
             return Ok(false);
@@ -490,12 +543,13 @@ impl<'a> Ctl {
     }
 
     fn flush(&self, modifier: FlushModifier, anchor: &str) -> ExecResult<()> {
-        let modifier = modifier.to_string();
-        let mut args = vec![Self::FLAG_FLUSH, &modifier];
+        let modifier = &modifier.to_string();
+        let mut args = vec![Self::FLAG_FLUSH, modifier];
         if !anchor.is_empty() {
             args.extend_from_slice(&[Self::FLAG_ANCHOR, anchor]);
         }
-        self.exec(&args).and(Ok(()))
+        self.exec(&args)?;
+        Ok(())
     }
 
     fn load(&self, file: LoadFile, anchor: &str) -> ExecResult<()> {
@@ -505,22 +559,22 @@ impl<'a> Ctl {
                 if !anchor.is_empty() {
                     args.extend_from_slice(&[OsStr::new(Self::FLAG_ANCHOR), OsStr::new(anchor)]);
                 }
-                self.exec(&args)
+                self.exec(&args)?;
             }
             LoadFile::Stdin(s) => {
                 let mut args = vec![Self::FLAG_FILE, "-"];
                 if !anchor.is_empty() {
                     args.extend_from_slice(&[Self::FLAG_ANCHOR, anchor]);
                 }
-                exec_stdin(&self.ctl_path, &args, s)
+                exec_stdin(&self.ctl_path, &args, s)?;
             }
         }
-        .and(Ok(()))
+        Ok(())
     }
 
     fn show(&self, modifier: ShowModifier, anchor: &str, verbose: bool) -> ExecResult<String> {
-        let modifier_string = modifier.to_string();
-        let mut args = vec![Self::FLAG_SHOW, &modifier_string];
+        let modifier_ptr = &modifier.to_string();
+        let mut args = vec![Self::FLAG_SHOW, modifier_ptr];
         if !anchor.is_empty() {
             args.extend_from_slice(&[Self::FLAG_ANCHOR, anchor]);
         }
@@ -590,7 +644,7 @@ impl Display for BlockPolicy {
 
 impl Default for BlockPolicy {
     fn default() -> Self {
-        Self::Return
+        Self::Drop
     }
 }
 
@@ -608,7 +662,6 @@ impl Default for Action {
 pub enum Antispoofing {
     NoRoute,
     UrpfFailed,
-    All,
 }
 
 impl<'a> Antispoofing {
@@ -621,14 +674,13 @@ impl Display for Antispoofing {
         match self {
             Self::NoRoute => write!(f, "{}", Self::NO_ROUTE),
             Self::UrpfFailed => write!(f, "{}", Self::URPF_FAILED),
-            Self::All => write!(f, "{}", &[Self::NO_ROUTE, Self::URPF_FAILED].join(", ")),
         }
     }
 }
 
 impl Default for Antispoofing {
     fn default() -> Self {
-        Self::All
+        Self::UrpfFailed
     }
 }
 
@@ -668,6 +720,70 @@ impl Default for ICMP {
     }
 }
 
+#[derive(PartialEq, Clone)]
+pub struct PassInterface {
+    interface: String,
+}
+
+impl PassInterface {
+    const IN: char = '<';
+    const OUT: char = '>';
+
+    pub fn new(s: &str) -> Self {
+        Self {
+            interface: s.into(),
+        }
+    }
+
+    pub fn interface(&self) -> &str {
+        &self.interface
+    }
+
+    pub fn get_name(&self) -> String {
+        self.interface
+            .trim_start_matches(|c| c == Self::IN || c == Self::OUT)
+            .into()
+    }
+
+    pub fn is_in(&self) -> bool {
+        self.interface.starts_with(Self::IN)
+    }
+
+    pub fn is_out(&self) -> bool {
+        self.interface.starts_with(Self::OUT)
+    }
+
+    pub fn has_no_direction(&self) -> bool {
+        !self.is_in() && !self.is_out()
+    }
+
+    pub fn to_in_string(&self) -> String {
+        format!("{}{}", Self::IN, &self.get_name())
+    }
+
+    pub fn to_out_string(&self) -> String {
+        format!("{}{}", Self::OUT, &self.get_name())
+    }
+
+    pub fn to_in(&self) -> Self {
+        Self {
+            interface: self.to_in_string(),
+        }
+    }
+
+    pub fn to_out(&self) -> Self {
+        Self {
+            interface: self.to_out_string(),
+        }
+    }
+}
+
+impl<S: AsRef<str>> From<S> for PassInterface {
+    fn from(s: S) -> Self {
+        Self::new(s.as_ref())
+    }
+}
+
 pub struct Rules {
     block_table_name: String,
     in_table_name: String,
@@ -677,12 +793,12 @@ pub struct Rules {
     pub is_enable_log: bool,
     pub incoming: Action,
     pub outgoing: Action,
-    pub is_block_ipv6: bool,
     pub antispoofing: Option<Antispoofing>,
+    pub is_block_ipv6: bool,
     pub lan: Option<Lan>,
     pub icmp: Option<ICMP>,
     pub skip_interfaces: Vec<String>,
-    pub pass_interfaces: Vec<String>,
+    pub pass_interfaces: Vec<PassInterface>,
     pub block_destinations: Vec<String>,
     pub in_destinations: Vec<String>,
     pub out_destinations: Vec<String>,
@@ -707,6 +823,19 @@ impl<'a> Rules {
     pub fn build(&self) -> String {
         let mut s = String::new();
         writeln!(&mut s, "#{}", &time());
+        let mut pass_in_interfaces = vec![];
+        let mut pass_out_interfaces = vec![];
+        let mut pass_interfaces = vec![];
+        for pass_interface in &self.pass_interfaces {
+            if pass_interface.is_in() {
+                &mut pass_in_interfaces
+            } else if pass_interface.is_out() {
+                &mut pass_out_interfaces
+            } else {
+                &mut pass_interfaces
+            }
+            .push(pass_interface.get_name());
+        }
         let mut build_macros = |prefix: &str, interfaces: &[String]| {
             let mut results = vec![];
             for (idx, interface) in interfaces.iter().enumerate() {
@@ -717,7 +846,9 @@ impl<'a> Rules {
             results
         };
         let skip_interfaces = build_macros("skip", &self.skip_interfaces);
-        let pass_interfaces = build_macros("pass", &self.pass_interfaces);
+        let pass_in_interfaces = build_macros("pass_in", &pass_in_interfaces);
+        let pass_out_interfaces = build_macros("pass_out", &pass_out_interfaces);
+        let pass_interfaces = build_macros("pass", &pass_interfaces);
         let mut build_tables = |table_name: &str, destinations: &[String]| {
             let mut addresses = vec![];
             let mut files = vec![];
@@ -740,7 +871,9 @@ impl<'a> Rules {
         build_tables(&self.in_table_name, &self.in_destinations);
         build_tables(&self.out_table_name, &self.out_destinations);
         writeln!(&mut s, "set block-policy {}", &self.block_policy);
-        writeln!(&mut s, "set skip on {{ {} }}", &skip_interfaces.join(", "));
+        if !skip_interfaces.is_empty() {
+            writeln!(&mut s, "set skip on {{ {} }}", &skip_interfaces.join(", "));
+        }
         writeln!(&mut s, "scrub in all");
         if self.min_ttl > 0 {
             writeln!(&mut s, "scrub out all min-ttl {}", self.min_ttl);
@@ -756,30 +889,41 @@ impl<'a> Rules {
         }
         match self.outgoing {
             Action::Block => {
-                writeln!(&mut s, "block {} out {} all", &self.block_policy, log);
+                writeln!(&mut s, "block return out {} all", log);
             }
             Action::Pass => {
                 writeln!(&mut s, "pass out all");
             }
         }
-        if self.is_block_ipv6 {
-            writeln!(&mut s, "block {} quick inet6 all", &self.block_policy);
-        }
-        writeln!(
-            &mut s,
-            "block {} in quick from <{}> to any",
-            &self.block_policy, &self.block_table_name,
-        );
-        writeln!(
-            &mut s,
-            "block {} out quick from any to <{}>",
-            &self.block_policy, &self.block_table_name,
-        );
         if let Some(antispoofing) = &self.antispoofing {
             writeln!(
                 &mut s,
-                "block drop in {} quick from {{ {} }} to any",
+                "block drop in {} quick from {} to any label \"ANTISPOOFING\"",
                 log, antispoofing,
+            );
+        }
+        writeln!(
+            &mut s,
+            "block drop in quick from <{}> to any label \"BLOCKLIST_IN\"",
+            &self.block_table_name,
+        );
+        writeln!(
+            &mut s,
+            "block return out quick from any to <{}> label \"BLOCKLIST_OUT\"",
+            &self.block_table_name,
+        );
+        if !pass_in_interfaces.is_empty() {
+            writeln!(
+                &mut s,
+                "pass in quick on {{ {} }} all",
+                &pass_in_interfaces.join(", "),
+            );
+        }
+        if !pass_out_interfaces.is_empty() {
+            writeln!(
+                &mut s,
+                "pass out quick on {{ {} }} all",
+                &pass_out_interfaces.join(", "),
             );
         }
         if !pass_interfaces.is_empty() {
@@ -789,33 +933,31 @@ impl<'a> Rules {
                 &pass_interfaces.join(", "),
             );
         }
+        if self.is_block_ipv6 {
+            writeln!(&mut s, "block {} in quick inet6 all", &self.block_policy);
+            writeln!(&mut s, "block return out quick inet6 all");
+        }
         if let Some(lan) = &self.lan {
             let ipv4nrm = gvars::IPV4_NOT_ROUTABLE_MULTICASTS.join(", ");
             let ipv6nrm = gvars::IPV6_NOT_ROUTABLE_MULTICASTS.join(", ");
-            let ipv4m: &str;
-            let ipv6m: &str;
-            match lan.multicast {
-                Multicast::NotRoutable => {
-                    ipv4m = &ipv4nrm;
-                    ipv6m = &ipv6nrm;
-                }
-                Multicast::All => {
-                    ipv4m = gvars::IPV4_MULTICAST;
-                    ipv6m = gvars::IPV6_MULTICAST;
-                }
-            }
+            let (ipv4m, ipv6m): (&str, &str) = match lan.multicast {
+                Multicast::NotRoutable => (&ipv4nrm, &ipv6nrm),
+                Multicast::All => (gvars::IPV4_MULTICAST, gvars::IPV6_MULTICAST),
+            };
             if lan.is_block_out_dns {
-                let mut block_out_dns = |af: &str, addrs: &[&str]| {
+                let mut block_out_dns = |addrs: &[&str]| {
                     for &addr in addrs {
                         writeln!(
                             &mut s,
-                            "block {} out quick {} proto {{ tcp, udp }} from {} to {} port domain",
-                            &self.block_policy, af, addr, addr,
+                            "block return out quick {} proto {{ tcp, udp }} from {} to {} port domain",
+                            if addr.contains(':') { "inet6" } else { "inet" }, addr, addr,
                         );
                     }
                 };
-                block_out_dns("inet", &gvars::IPV4_PRIVATE_NETWORKS);
-                block_out_dns("inet6", &gvars::IPV6_PRIVATE_NETWORKS);
+                block_out_dns(&gvars::IPV4_PRIVATE_NETWORKS);
+                if !self.is_block_ipv6 {
+                    block_out_dns(&gvars::IPV6_PRIVATE_NETWORKS);
+                }
             }
             for addr in &gvars::IPV4_PRIVATE_NETWORKS {
                 writeln!(
@@ -834,35 +976,48 @@ impl<'a> Rules {
                 &Ipv4Addr::BROADCAST,
                 &ipv4nrm,
             );
-            for addr in &gvars::IPV6_PRIVATE_NETWORKS {
+            if !self.is_block_ipv6 {
+                for addr in &gvars::IPV6_PRIVATE_NETWORKS {
+                    writeln!(
+                        &mut s,
+                        "pass quick inet6 from {} to {{ {}, {} }}",
+                        addr, addr, ipv6m,
+                    );
+                }
                 writeln!(
                     &mut s,
-                    "pass quick inet6 from {} to {{ {}, {} }}",
-                    addr, addr, ipv6m,
+                    "pass quick inet6 from {} to {{ {} }}",
+                    &Ipv6Addr::UNSPECIFIED,
+                    &ipv6nrm,
                 );
             }
-            writeln!(
-                &mut s,
-                "pass quick inet6 from {} to {{ {} }}",
-                &Ipv6Addr::UNSPECIFIED,
-                &ipv6nrm,
-            );
         }
         match self.icmp {
             Some(ICMP::Echoreq) => {
-                for (af, proto, icmp_type) in &[
-                    ("inet", "icmp", "icmp-type"),
-                    ("inet6", "icmp6", "icmp6-type"),
-                ] {
+                let mut pass_icmp = |af: &str, proto: &str, type_prefix: &str, label: &str| {
                     writeln!(
                         &mut s,
-                        "pass quick {} proto {} all {} echoreq",
-                        af, proto, icmp_type,
+                        "pass quick {} proto {} all {} echoreq label \"{}\"",
+                        af, proto, type_prefix, label,
                     );
+                };
+                pass_icmp("inet", "icmp", "icmp-type", "ICMP");
+                if !self.is_block_ipv6 {
+                    pass_icmp("inet6", "icmp6", "icmp6-type", "ICMP6");
                 }
             }
             Some(ICMP::All) => {
-                writeln!(&mut s, "pass quick proto {{ icmp, icmp6 }} all");
+                let mut pass_icmp = |af: &str, proto: &str, label: &str| {
+                    writeln!(
+                        &mut s,
+                        "pass quick {} proto {} all label \"{}\"",
+                        af, proto, label,
+                    );
+                };
+                pass_icmp("inet", "icmp", "ICMP");
+                if !self.is_block_ipv6 {
+                    pass_icmp("inet6", "icmp6", "ICMP6");
+                }
             }
             _ => {}
         }
@@ -891,8 +1046,8 @@ impl Default for Rules {
             is_enable_log: false,
             incoming: Default::default(),
             outgoing: Default::default(),
+            antispoofing: Some(Default::default()),
             is_block_ipv6: false,
-            antispoofing: None,
             lan: Some(Default::default()),
             icmp: Some(Default::default()),
             skip_interfaces: vec![],

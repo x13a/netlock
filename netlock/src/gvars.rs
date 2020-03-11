@@ -10,7 +10,8 @@ pub const IPV4_PRIVATE_NETWORKS: [&str; 4] = [
 pub const IPV6_PRIVATE_NETWORKS: [&str; 2] = ["fe80::/10", "fc00::/7"];
 
 pub const IPV4_NOT_ROUTABLE_MULTICASTS: [&str; 1] = ["224.0.0.0/24"];
-pub const IPV6_NOT_ROUTABLE_MULTICASTS: [&str; 2] = ["ff02::/16", "ff12::/16"];
+pub const IPV6_NOT_ROUTABLE_MULTICASTS: [&str; 4] =
+    ["ff01::/16", "ff11::/16", "ff02::/16", "ff12::/16"];
 
 #[cfg(unix)]
 pub const DEFAULT_CONF_DIR: &str = "~/.config/me.lucky.netlock/";
