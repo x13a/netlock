@@ -1,7 +1,10 @@
+use std::fs::read_dir;
+use std::io;
 use std::net::Ipv4Addr;
+use std::path::Path;
 use std::str::FromStr;
 
-use crate::utils::{exec, ExecResult};
+use crate::utils::{exec, read_lines, ExecResult, ExpandUser};
 
 pub struct RoutingInfo {
     interface: String,
@@ -98,4 +101,49 @@ pub fn get_useful_routing_table_info() -> ExecResult<RoutingInfo> {
         interface,
         destination,
     })
+}
+
+fn get_destinations_from_ovpn_file(path: impl AsRef<Path>) -> io::Result<Vec<String>> {
+    let mut destinations = vec![];
+    for line in read_lines(path)? {
+        let line = line?;
+        if !line.starts_with("remote ") {
+            continue;
+        }
+        if let Some(s) = line.split_whitespace().nth(1) {
+            destinations.push(s.into());
+        }
+    }
+    Ok(destinations)
+}
+
+fn get_destinations_from_configuration_file(path: impl AsRef<Path>) -> io::Result<Vec<String>> {
+    let path = path.as_ref();
+    if let Some(ext) = path.extension() {
+        if ext == "ovpn" {
+            return get_destinations_from_ovpn_file(path);
+        }
+    }
+    Ok(vec![])
+}
+
+pub fn get_destinations_from_configuration_files(
+    paths: &[impl AsRef<Path>],
+) -> io::Result<Vec<String>> {
+    let mut destinations = vec![];
+    for path in paths.iter().map(|p| p.as_ref().expanduser()) {
+        assert!(!path.starts_with("~"));
+        if path.is_file() {
+            destinations.extend_from_slice(&get_destinations_from_configuration_file(&path)?);
+        } else if path.is_dir() {
+            for entry in read_dir(&path)? {
+                let path = entry?.path();
+                if path.is_file() {
+                    destinations
+                        .extend_from_slice(&get_destinations_from_configuration_file(&path)?);
+                }
+            }
+        }
+    }
+    Ok(destinations)
 }

@@ -2,8 +2,8 @@ use std::env::var_os;
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt::{self, Display, Formatter};
-use std::fs::{set_permissions, Permissions};
-use std::io::{self, ErrorKind, Write};
+use std::fs::{set_permissions, File, Permissions};
+use std::io::{self, BufRead, BufReader, ErrorKind, Lines, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::SystemTime;
@@ -153,4 +153,8 @@ pub fn time() -> u64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+pub fn read_lines<P: AsRef<Path>>(path: P) -> io::Result<Lines<BufReader<File>>> {
+    Ok(BufReader::new(File::open(path)?).lines())
 }

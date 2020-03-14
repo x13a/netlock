@@ -23,6 +23,7 @@ mod flag {
     pub const PASS: &str = "p";
     pub const IN: &str = "i";
     pub const OUT: &str = "o";
+    pub const FILE: &str = "f";
     pub const PRINT: &str = "P";
     pub const ENABLE: &str = "E";
     pub const DISABLE: &str = "D";
@@ -35,6 +36,7 @@ mod metavar {
     pub const TTL: &str = "TTL";
     pub const INTERFACE: &str = "INTERFACE";
     pub const DESTINATION: &str = "DESTINATION";
+    pub const FILE: &str = "FILE";
 }
 
 #[derive(Clone, Copy)]
@@ -115,12 +117,13 @@ fn print_usage(to: PrintDestination) {
         "{} [-{h}{V}{v}{O}{r}{q}{l}] [-{a} <{A}>] [-{t} <{T}>]\n\
          \t[.. -{s} <{I}>] [.. -{p} <{I}>]\n\
          \t[.. -{b} <{D}>] [.. -{i} <{D}>] [.. -{o} <{D}>]\n\
+         \t[.. -{f} <{F}>]\n\
          \t-{{ {} }}\n\n\
          [-{h}] * Print help and exit\n\
          [-{V}] * Print version and exit\n\n\
          [-{v}] * Enable firewall logging\n\
          [-{O}] * Skipass on loopback\n\
-         [-{r}] * Extend interface and destination from routing table\n\
+         [-{r}] * Extend <{I}> and <{D}> from routing table\n\
          [-{q}] * Block IPv6\n\
          [-{l}] * No lan\n\
          [-{a}] * Use <{A}> (`{}` will be replaced with `{}`)\n\
@@ -129,7 +132,8 @@ fn print_usage(to: PrintDestination) {
          [-{p}] * Pass on <{I}> (can specify direction: `<{PH}` - in, `>{PH}` - out)\n\
          [-{b}] * Block <{D}> {DH}\n\
          [-{i}] * Pass in from <{D}> {DH}\n\
-         [-{o}] * Pass out to <{D}> {DH}\n\n\
+         [-{o}] * Pass out to <{D}> {DH}\n\
+         [-{f}] * Extend <{D}> from configuration <{F}>\n\n\
          [-{}] * Print rules and exit\n\
          [-{}] * Enable lock\n\
          [-{}] * Disable lock\n\
@@ -158,10 +162,12 @@ fn print_usage(to: PrintDestination) {
         b = flag::BLOCK,
         i = flag::IN,
         o = flag::OUT,
+        f = flag::FILE,
         A = metavar::ANCHOR,
         T = metavar::TTL,
         I = metavar::INTERFACE,
         D = metavar::DESTINATION,
+        F = metavar::FILE,
         PH = pass_help_interface,
         DH = destination_help,
     );
@@ -255,6 +261,7 @@ struct NSArgs {
     block: Vec<String>,
     in_d: Vec<String>,
     out_d: Vec<String>,
+    files: Vec<String>,
 }
 
 fn parse_args() -> Result<NSArgs, String> {
@@ -337,6 +344,13 @@ fn parse_args() -> Result<NSArgs, String> {
                     }
                     _ => return err_missing_arg(metavar::DESTINATION),
                 },
+                flag::FILE => match argv.get(idx) {
+                    Some(s) => {
+                        nsargs.files.push(s.into());
+                        idx += 1;
+                    }
+                    _ => return err_missing_arg(metavar::FILE),
+                },
                 s => match Command::from_str(s) {
                     Ok(cmd) => {
                         nsargs.command = Some(cmd);
@@ -358,6 +372,35 @@ fn parse_args() -> Result<NSArgs, String> {
 
 type MainResult = Result<(), Box<dyn Error>>;
 
+fn update_rules(loader: &mut pf::Loader, nsargs: &NSArgs) -> MainResult {
+    let manager = loader.manager();
+    if nsargs.is_skipass_loopback {
+        if let Some(anchor) = &nsargs.anchor {
+            manager.set_anchor(anchor);
+        }
+        manager.set_skipass_loopback()?;
+    }
+    if nsargs.is_use_routing {
+        manager.extend_rules_from_routing_table()?;
+    }
+    let rules = manager.rules();
+    rules.min_ttl = nsargs.min_ttl;
+    rules.is_enable_log = nsargs.is_verbose;
+    rules.is_block_ipv6 = nsargs.is_block_ipv6;
+    if nsargs.is_no_lan {
+        rules.lan = None;
+    }
+    rules.skip_interfaces.extend_from_slice(&nsargs.skip);
+    rules.pass_interfaces.extend_from_slice(&nsargs.pass);
+    rules.block_destinations.extend_from_slice(&nsargs.block);
+    rules.in_destinations.extend_from_slice(&nsargs.in_d);
+    rules.out_destinations.extend_from_slice(&nsargs.out_d);
+    if !nsargs.files.is_empty() {
+        manager.extend_rules_from_configuration_files(&nsargs.files)?;
+    }
+    Ok(())
+}
+
 fn main() -> MainResult {
     let nsargs = parse_args()?;
     if nsargs.is_help {
@@ -369,39 +412,14 @@ fn main() -> MainResult {
         return Ok(());
     }
     let mut loader = pf::Loader::default();
-    let mut update_rules = || -> MainResult {
-        let manager = loader.manager();
-        if nsargs.is_skipass_loopback {
-            if let Some(anchor) = &nsargs.anchor {
-                manager.set_anchor(anchor);
-            }
-            manager.set_skipass_loopback()?;
-        }
-        if nsargs.is_use_routing {
-            manager.extend_rules_from_routing_table()?;
-        }
-        let rules = manager.rules();
-        rules.min_ttl = nsargs.min_ttl;
-        rules.is_enable_log = nsargs.is_verbose;
-        rules.is_block_ipv6 = nsargs.is_block_ipv6;
-        if nsargs.is_no_lan {
-            rules.lan = None;
-        }
-        rules.skip_interfaces.extend_from_slice(&nsargs.skip);
-        rules.pass_interfaces.extend_from_slice(&nsargs.pass);
-        rules.block_destinations.extend_from_slice(&nsargs.block);
-        rules.in_destinations.extend_from_slice(&nsargs.in_d);
-        rules.out_destinations.extend_from_slice(&nsargs.out_d);
-        Ok(())
-    };
     let print_ok = || println!("OK");
     match nsargs.command.expect("nsargs.command is None") {
         Command::Print => {
-            update_rules()?;
+            update_rules(&mut loader, &nsargs)?;
             print!("{}", &loader.manager().rules().build());
         }
         Command::Enable => {
-            update_rules()?;
+            update_rules(&mut loader, &nsargs)?;
             loader.enable(nsargs.anchor)?;
             print_ok();
         }

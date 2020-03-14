@@ -1,15 +1,15 @@
 use std::ffi::OsStr;
 use std::fmt::{self, Display, Formatter, Write};
-use std::fs::{create_dir_all, read_to_string, write};
+use std::fs::{create_dir_all, write};
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use crate::gvars;
-use crate::tools::get_useful_routing_table_info;
+use crate::tools::{get_destinations_from_configuration_files, get_useful_routing_table_info};
 use crate::utils::{
-    clear_go_permissions, exec, exec_stdin, time, ExecResult, ExpandUser, IsExecutable,
+    clear_go_permissions, exec, exec_stdin, read_lines, time, ExecResult, ExpandUser, IsExecutable,
 };
 
 pub struct Loader {
@@ -106,11 +106,12 @@ impl<'a> Loader {
     }
 
     fn load_settings_conf(&mut self) -> io::Result<()> {
-        for opts in read_to_string(&self.get_settings_conf_path())?
-            .lines()
-            .map(|s| s.split(Self::SETTINGS_SEP).collect::<Vec<_>>())
-            .filter(|v| v.len() >= 2)
-        {
+        for line in read_lines(&self.get_settings_conf_path())? {
+            let line = line?;
+            let opts = line.split(Self::SETTINGS_SEP).collect::<Vec<_>>();
+            if opts.len() < 2 {
+                continue;
+            }
             match opts[0] {
                 Self::SETTINGS_MANAGER_STATE => {
                     self.manager.state = opts[1].parse().unwrap_or(self.manager.state)
@@ -270,6 +271,18 @@ impl<'a> Manager {
         let destination = info.destination().to_string();
         if !destination.is_empty() && !self.rules.out_destinations.contains(&destination) {
             self.rules.out_destinations.push(destination);
+        }
+        Ok(())
+    }
+
+    pub fn extend_rules_from_configuration_files(
+        &mut self,
+        paths: &[impl AsRef<Path>],
+    ) -> io::Result<()> {
+        for destination in get_destinations_from_configuration_files(paths)? {
+            if !self.rules.out_destinations.contains(&destination) {
+                self.rules.out_destinations.push(destination);
+            }
         }
         Ok(())
     }
