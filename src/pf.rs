@@ -302,6 +302,7 @@ impl<'a> Manager {
             _ => self.ctl.load(file, &self.anchor)?,
         }
         self.state = true;
+        self.ctl.flush(FlushModifier::States, "")?;
         Ok(())
     }
 
@@ -395,12 +396,14 @@ impl Display for ShowModifier<'_> {
 
 enum FlushModifier {
     Rules,
+    States,
     Tables,
     All,
 }
 
 impl<'a> FlushModifier {
     const RULES: &'a str = "rules";
+    const STATES: &'a str = "states";
     const TABLES: &'a str = "Tables";
     const ALL: &'a str = "all";
 }
@@ -409,6 +412,7 @@ impl Display for FlushModifier {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Rules => write!(f, "{}", Self::RULES),
+            Self::States => write!(f, "{}", Self::STATES),
             Self::Tables => write!(f, "{}", Self::TABLES),
             Self::All => write!(f, "{}", Self::ALL),
         }
@@ -661,6 +665,31 @@ impl Default for BlockPolicy {
     }
 }
 
+pub enum StatePolicy {
+    IfBound,
+    Floating,
+}
+
+impl<'a> StatePolicy {
+    const IF_BOUND: &'a str = "if-bound";
+    const FLOATING: &'a str = "floating";
+}
+
+impl Display for StatePolicy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IfBound => write!(f, "{}", Self::IF_BOUND),
+            Self::Floating => write!(f, "{}", Self::FLOATING),
+        }
+    }
+}
+
+impl Default for StatePolicy {
+    fn default() -> Self {
+        Self::Floating
+    }
+}
+
 pub enum Action {
     Block,
     Pass,
@@ -802,6 +831,7 @@ pub struct Rules {
     in_table_name: String,
     out_table_name: String,
     pub block_policy: BlockPolicy,
+    pub state_policy: StatePolicy,
     pub min_ttl: u8,
     pub is_enable_log: bool,
     pub incoming: Action,
@@ -884,6 +914,7 @@ impl<'a> Rules {
         build_tables(&self.in_table_name, &self.in_destinations);
         build_tables(&self.out_table_name, &self.out_destinations);
         writeln!(&mut s, "set block-policy {}", &self.block_policy);
+        writeln!(&mut s, "set state-policy {}", &self.state_policy);
         if !skip_interfaces.is_empty() {
             writeln!(&mut s, "set skip on {{ {} }}", &skip_interfaces.join(", "));
         }
@@ -1055,6 +1086,7 @@ impl Default for Rules {
             in_table_name: Self::DEFAULT_IN_TABLE_NAME.into(),
             out_table_name: Self::DEFAULT_OUT_TABLE_NAME.into(),
             block_policy: Default::default(),
+            state_policy: Default::default(),
             min_ttl: 0,
             is_enable_log: false,
             incoming: Default::default(),
