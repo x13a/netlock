@@ -18,9 +18,10 @@ mod flag {
     pub const USE_ROUTING: &str = "r";
     pub const ANCHOR: &str = "a";
     pub const MINIMUM_TTL: &str = "t";
-    pub const BLOCK: &str = "b";
     pub const SKIP: &str = "s";
     pub const PASS: &str = "p";
+    pub const PASS_OWNER: &str = "O";
+    pub const BLOCK: &str = "b";
     pub const IN: &str = "i";
     pub const OUT: &str = "o";
     pub const FILE: &str = "f";
@@ -35,6 +36,7 @@ mod metavar {
     pub const ANCHOR: &str = "ANCHOR";
     pub const TTL: &str = "TTL";
     pub const INTERFACE: &str = "INTERFACE";
+    pub const OWNER: &str = "OWNER";
     pub const DESTINATION: &str = "DESTINATION";
     pub const FILE: &str = "FILE";
 }
@@ -112,24 +114,25 @@ enum PrintDestination {
 
 fn print_usage(to: PrintDestination) {
     let destination_help = "( ip | hostname | filepath )";
-    let pass_help_interface = "tun0";
+    let pass_help_interface = pf::Direction::new("tun0");
     let usage = format!(
-        "{} [-{h}{V}{v}{O}{r}{q}{l}] [-{a} <{A}>] [-{t} <{T}>]\n\
-         \t[.. -{s} <{I}>] [.. -{p} <{I}>]\n\
+        "{} [-{h}{V}{v}{Q}{r}{q}{l}] [-{a} <{A}>] [-{t} <{T}>]\n\
+         \t[.. -{s} <{I}>] [.. -{p} <{I}>] [.. -{O} <{W}>]\n\
          \t[.. -{b} <{D}>] [.. -{i} <{D}>] [.. -{o} <{D}>]\n\
          \t[.. -{f} <{F}>]\n\
          \t-{{ {} }}\n\n\
          [-{h}] * Print help and exit\n\
          [-{V}] * Print version and exit\n\n\
          [-{v}] * Enable firewall logging\n\
-         [-{O}] * Skipass on loopback\n\
+         [-{Q}] * Skipass on loopback\n\
          [-{r}] * Extend <{I}> and <{D}> from routing table\n\
          [-{q}] * Block IPv6\n\
          [-{l}] * No lan\n\
          [-{a}] * Use <{A}> (`{}` will be replaced with `{}`)\n\
          [-{t}] * Minimum <{T}>\n\
          [-{s}] * Skip on <{I}>\n\
-         [-{p}] * Pass on <{I}> (can specify direction: `<{PH}` - in, `>{PH}` - out)\n\
+         [-{p}] * Pass on <{I}> (can specify direction: `{}` - in, `{}` - out)\n\
+         [-{O}] * Pass owned by <{W}> (`{}USER` | `{}GROUP`)\n\
          [-{b}] * Block <{D}> {DH}\n\
          [-{i}] * Pass in from <{D}> {DH}\n\
          [-{o}] * Pass out to <{D}> {DH}\n\
@@ -143,6 +146,10 @@ fn print_usage(to: PrintDestination) {
         &collect_to_string(Command::iter()),
         &pf::Manager::ANCHOR_REPLACE_FROM,
         &pf::Manager::ANCHOR_REPLACE_TO,
+        &pass_help_interface.to_in_string(),
+        &pass_help_interface.to_out_string(),
+        &pf::Owner::USER,
+        &pf::Owner::GROUP,
         &Command::Print.to_string(),
         &Command::Enable.to_string(),
         &Command::Disable.to_string(),
@@ -151,7 +158,7 @@ fn print_usage(to: PrintDestination) {
         h = flag::HELP,
         V = flag::VERSION,
         v = flag::VERBOSE,
-        O = flag::SKIPASS_LOOPBACK,
+        Q = flag::SKIPASS_LOOPBACK,
         r = flag::USE_ROUTING,
         q = flag::BLOCK_IPV6,
         l = flag::NO_LAN,
@@ -159,6 +166,7 @@ fn print_usage(to: PrintDestination) {
         t = flag::MINIMUM_TTL,
         s = flag::SKIP,
         p = flag::PASS,
+        O = flag::PASS_OWNER,
         b = flag::BLOCK,
         i = flag::IN,
         o = flag::OUT,
@@ -166,9 +174,9 @@ fn print_usage(to: PrintDestination) {
         A = metavar::ANCHOR,
         T = metavar::TTL,
         I = metavar::INTERFACE,
+        W = metavar::OWNER,
         D = metavar::DESTINATION,
         F = metavar::FILE,
-        PH = pass_help_interface,
         DH = destination_help,
     );
     match to {
@@ -257,7 +265,8 @@ struct NSArgs {
     min_ttl: u8,
     command: Option<Command>,
     skip: Vec<String>,
-    pass: Vec<pf::PassInterface>,
+    pass: Vec<pf::Direction>,
+    pass_owners: Vec<pf::Owner>,
     block: Vec<String>,
     in_d: Vec<String>,
     out_d: Vec<String>,
@@ -319,6 +328,13 @@ fn parse_args() -> Result<NSArgs, String> {
                 flag::PASS => match argv.get(idx) {
                     Some(s) => {
                         nsargs.pass.push(s.into());
+                        idx += 1;
+                    }
+                    _ => return err_missing_arg(metavar::INTERFACE),
+                },
+                flag::PASS_OWNER => match argv.get(idx) {
+                    Some(s) => {
+                        nsargs.pass_owners.push(s.into());
                         idx += 1;
                     }
                     _ => return err_missing_arg(metavar::INTERFACE),
@@ -392,6 +408,7 @@ fn update_rules(loader: &mut pf::Loader, nsargs: &NSArgs) -> MainResult {
     }
     rules.skip_interfaces.extend_from_slice(&nsargs.skip);
     rules.pass_interfaces.extend_from_slice(&nsargs.pass);
+    rules.pass_owners.extend_from_slice(&nsargs.pass_owners);
     rules.block_destinations.extend_from_slice(&nsargs.block);
     rules.in_destinations.extend_from_slice(&nsargs.in_d);
     rules.out_destinations.extend_from_slice(&nsargs.out_d);

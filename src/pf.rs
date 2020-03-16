@@ -249,7 +249,7 @@ impl<'a> Manager {
                 .lines()
                 .map(|s| s.split_whitespace().collect::<Vec<_>>())
                 .filter(|v| v.len() == 1) // v[1] == "(skip)"
-                .map(|v| PassInterface::new(v[0]))
+                .map(|v| Direction::new(v[0]))
             {
                 if !self.rules.pass_interfaces.contains(&interface) {
                     self.rules.pass_interfaces.push(interface);
@@ -263,7 +263,7 @@ impl<'a> Manager {
         let info = get_useful_routing_table_info()?;
         let interface = info.interface();
         if !interface.is_empty() {
-            let pass_interface = PassInterface::new(interface).to_out();
+            let pass_interface = Direction::new(interface).to_out();
             if !self.rules.pass_interfaces.contains(&pass_interface) {
                 self.rules.pass_interfaces.push(pass_interface);
             }
@@ -763,36 +763,28 @@ impl Default for ICMP {
 }
 
 #[derive(PartialEq, Clone)]
-pub struct PassInterface {
-    interface: String,
-}
+pub struct Direction(String);
 
-impl PassInterface {
-    const IN: char = '<';
-    const OUT: char = '>';
+impl Direction {
+    pub const IN: char = '<';
+    pub const OUT: char = '>';
 
     pub fn new(s: &str) -> Self {
-        Self {
-            interface: s.into(),
-        }
+        Self(s.into())
     }
 
-    pub fn interface(&self) -> &str {
-        &self.interface
-    }
-
-    pub fn get_name(&self) -> String {
-        self.interface
+    pub fn unwrap(&self) -> String {
+        self.0
             .trim_start_matches(|c| c == Self::IN || c == Self::OUT)
             .into()
     }
 
     pub fn is_in(&self) -> bool {
-        self.interface.starts_with(Self::IN)
+        self.0.starts_with(Self::IN)
     }
 
     pub fn is_out(&self) -> bool {
-        self.interface.starts_with(Self::OUT)
+        self.0.starts_with(Self::OUT)
     }
 
     pub fn has_no_direction(&self) -> bool {
@@ -800,27 +792,56 @@ impl PassInterface {
     }
 
     pub fn to_in_string(&self) -> String {
-        format!("{}{}", Self::IN, &self.get_name())
+        format!("{}{}", Self::IN, &self.unwrap())
     }
 
     pub fn to_out_string(&self) -> String {
-        format!("{}{}", Self::OUT, &self.get_name())
+        format!("{}{}", Self::OUT, &self.unwrap())
     }
 
     pub fn to_in(&self) -> Self {
-        Self {
-            interface: self.to_in_string(),
-        }
+        Self(self.to_in_string())
     }
 
     pub fn to_out(&self) -> Self {
-        Self {
-            interface: self.to_out_string(),
-        }
+        Self(self.to_out_string())
     }
 }
 
-impl<S: AsRef<str>> From<S> for PassInterface {
+impl<S: AsRef<str>> From<S> for Direction {
+    fn from(s: S) -> Self {
+        Self::new(s.as_ref())
+    }
+}
+
+#[derive(Clone)]
+pub struct Owner(String);
+
+impl<'a> Owner {
+    pub const USER: &'a str = "u:";
+    pub const GROUP: &'a str = "g:";
+
+    pub fn new(s: &str) -> Self {
+        Self(s.into())
+    }
+
+    pub fn unwrap(&self) -> String {
+        self.0
+            .trim_start_matches(Self::USER)
+            .trim_start_matches(Self::GROUP)
+            .into()
+    }
+
+    pub fn is_user(&self) -> bool {
+        !self.is_group()
+    }
+
+    pub fn is_group(&self) -> bool {
+        self.0.starts_with(Self::GROUP)
+    }
+}
+
+impl<S: AsRef<str>> From<S> for Owner {
     fn from(s: S) -> Self {
         Self::new(s.as_ref())
     }
@@ -841,7 +862,8 @@ pub struct Rules {
     pub lan: Option<Lan>,
     pub icmp: Option<ICMP>,
     pub skip_interfaces: Vec<String>,
-    pub pass_interfaces: Vec<PassInterface>,
+    pub pass_interfaces: Vec<Direction>,
+    pub pass_owners: Vec<Owner>,
     pub block_destinations: Vec<String>,
     pub in_destinations: Vec<String>,
     pub out_destinations: Vec<String>,
@@ -877,7 +899,7 @@ impl<'a> Rules {
             } else {
                 &mut pass_interfaces
             }
-            .push(pass_interface.get_name());
+            .push(pass_interface.unwrap());
         }
         let mut build_macros = |prefix: &str, interfaces: &[String]| {
             let mut results = vec![];
@@ -976,6 +998,22 @@ impl<'a> Rules {
                 "pass quick on {{ {} }} all",
                 &pass_interfaces.join(", "),
             );
+        }
+        let mut users = vec![];
+        let mut groups = vec![];
+        for owner in &self.pass_owners {
+            if owner.is_group() {
+                &mut groups
+            } else {
+                &mut users
+            }
+            .push(owner.unwrap());
+        }
+        if !users.is_empty() {
+            writeln!(&mut s, "pass quick all user {{ {} }}", &users.join(", "));
+        }
+        if !groups.is_empty() {
+            writeln!(&mut s, "pass quick all group {{ {} }}", &groups.join(", "));
         }
         if self.is_block_ipv6 {
             writeln!(&mut s, "block {} in quick inet6 all", &self.block_policy);
@@ -1097,6 +1135,7 @@ impl Default for Rules {
             icmp: Some(Default::default()),
             skip_interfaces: vec![],
             pass_interfaces: vec![],
+            pass_owners: vec![],
             block_destinations: vec![],
             in_destinations: vec![],
             out_destinations: vec![],
