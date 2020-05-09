@@ -1,12 +1,16 @@
+use std::collections::HashSet;
 use std::env::args;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
-use std::num::ParseIntError;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::exit;
 use std::slice::Iter;
 use std::str::FromStr;
 
 use netlock::pf;
+
+const EX_OK: i32 = 0;
+const EX_USAGE: i32 = 64;
 
 mod flag {
     pub const HELP: &str = "h";
@@ -16,11 +20,12 @@ mod flag {
     pub const BLOCK_IPV6: &str = "6";
     pub const NO_LAN: &str = "l";
     pub const USE_ROUTING: &str = "r";
+    pub const CONFIG: &str = "c";
     pub const ANCHOR: &str = "a";
-    pub const MINIMUM_TTL: &str = "t";
+    pub const TTL: &str = "t";
     pub const SKIP: &str = "s";
     pub const PASS: &str = "p";
-    pub const PASS_OWNER: &str = "O";
+    pub const OWNER: &str = "O";
     pub const BLOCK: &str = "b";
     pub const IN: &str = "i";
     pub const OUT: &str = "o";
@@ -33,12 +38,13 @@ mod flag {
 }
 
 mod metavar {
+    pub const CONFIG_DIR: &str = "CONFIG_DIR";
     pub const ANCHOR: &str = "ANCHOR";
     pub const TTL: &str = "TTL";
     pub const INTERFACE: &str = "INTERFACE";
     pub const OWNER: &str = "OWNER";
     pub const DESTINATION: &str = "DESTINATION";
-    pub const FILE: &str = "FILE";
+    pub const PATH: &str = "PATH";
 }
 
 #[derive(Clone, Copy)]
@@ -73,7 +79,7 @@ impl FromStr for Command {
             flag::DISABLE => Ok(Self::Disable),
             flag::LOAD => Ok(Self::Load),
             flag::STATUS => Ok(Self::Status),
-            _ => Err(format!("Invalid command value: `{}`", s)),
+            _ => Err(format!("Invalid command: `{}`", s)),
         }
     }
 }
@@ -92,14 +98,17 @@ impl Display for Command {
 
 fn get_prog_name() -> String {
     let prog_name = "PROG_NAME";
-    Path::new(&args().next().unwrap_or_else(|| prog_name.into()))
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(prog_name)
-        .into()
+    Path::new(match &args().next() {
+        Some(s) => s,
+        None => return prog_name.into(),
+    })
+    .file_name()
+    .and_then(|s| s.to_str())
+    .unwrap_or(prog_name)
+    .into()
 }
 
-fn collect_to_string<T, V>(it: T) -> String
+fn to_choices_string<T, V>(it: T) -> String
 where
     T: Iterator<Item = V>,
     V: ToString,
@@ -113,48 +122,54 @@ enum PrintDestination {
 }
 
 fn print_usage(to: PrintDestination) {
-    let destination_help = "( ip | hostname | filepath )";
-    let pass_help_interface = pf::Direction::new("tun0");
     let usage = format!(
-        "{} [-{h}{V}{v}{Q}{r}{q}{l}] [-{a} <{A}>] [-{t} <{T}>]\n\
+        "{} [-{h}{V}] [-{v}{v}] [-{Q}{r}{q}{l}] [-{c} <{C}>] [-{a} <{A}>] [-{t} <{T}>]\n\
          \t[.. -{s} <{I}>] [.. -{p} <{I}>] [.. -{O} <{W}>]\n\
          \t[.. -{b} <{D}>] [.. -{i} <{D}>] [.. -{o} <{D}>]\n\
-         \t[.. -{f} <{F}>]\n\
+         \t[.. -{f} <{P}>]\n\
          \t-{{ {} }}\n\n\
          [-{h}] * Print help and exit\n\
          [-{V}] * Print version and exit\n\n\
-         [-{v}] * Enable firewall logging\n\
+         [-{v}] * Verbose level (2 - enable firewall logging)\n\
          [-{Q}] * Skipass on loopback\n\
-         [-{r}] * Extend <{I}> and <{D}> from routing table\n\
+         [-{r}] * Extend outgoing <{I}> and <{D}> from routing table\n\
          [-{q}] * Block IPv6\n\
          [-{l}] * No lan\n\
+         [-{c}] * Path to <{C}> (default: {})\n\
          [-{a}] * Use <{A}> (`{}` will be replaced with `{}`)\n\
-         [-{t}] * Minimum <{T}>\n\
+         [-{t}] * Minimum outgoing <{T}>\n\
          [-{s}] * Skip on <{I}>\n\
-         [-{p}] * Pass on <{I}> (can specify direction: `{}` - in, `{}` - out)\n\
-         [-{O}] * Pass owned by <{W}> (`{}USER` | `{}GROUP`)\n\
-         [-{b}] * Block <{D}> {DH}\n\
-         [-{i}] * Pass in from <{D}> {DH}\n\
-         [-{o}] * Pass out to <{D}> {DH}\n\
-         [-{f}] * Extend <{D}> from configuration <{F}>\n\n\
+         [-{p}] * Pass on <{I}>\n\
+         [-{O}] * Pass owned by <{W}> ( {U} | {}{U} | {}GROUP )\n\
+         [-{b}] * Block <{D}>\n\
+         [-{i}] * Pass in from <{D}>\n\
+         [-{o}] * Pass out to <{D}>\n\
+         [-{f}] * Extend outgoing <{D}> from configuration <{P}>\n\n\
          [-{}] * Print rules and exit\n\
          [-{}] * Enable lock\n\
          [-{}] * Disable lock\n\
          [-{}] * Load lock\n\
-         [-{}] * Show status",
+         [-{}] * Show status\n\n\
+         {I}:\n\
+         \r  ( {N} | {}{N} | {}{N} ) direction only on pass\n\n\
+         {D}:\n\
+         \r  ( ip | host | file )\n\n\
+         {P}:\n\
+         \r  ( dir | file ) only .ovpn is supported, dir scan not recursive",
         &get_prog_name(),
-        &collect_to_string(Command::iter()),
+        &to_choices_string(Command::iter()),
+        &pf::DEFAULT_CONF_DIR,
         &pf::Manager::ANCHOR_REPLACE_FROM,
         &pf::Manager::ANCHOR_REPLACE_TO,
-        &pass_help_interface.to_in_string(),
-        &pass_help_interface.to_out_string(),
         &pf::Owner::USER,
         &pf::Owner::GROUP,
-        &Command::Print.to_string(),
-        &Command::Enable.to_string(),
-        &Command::Disable.to_string(),
-        &Command::Load.to_string(),
-        &Command::Status.to_string(),
+        &Command::Print,
+        &Command::Enable,
+        &Command::Disable,
+        &Command::Load,
+        &Command::Status,
+        &pf::Direction::IN,
+        &pf::Direction::OUT,
         h = flag::HELP,
         V = flag::VERSION,
         v = flag::VERBOSE,
@@ -162,22 +177,25 @@ fn print_usage(to: PrintDestination) {
         r = flag::USE_ROUTING,
         q = flag::BLOCK_IPV6,
         l = flag::NO_LAN,
+        c = flag::CONFIG,
         a = flag::ANCHOR,
-        t = flag::MINIMUM_TTL,
+        t = flag::TTL,
         s = flag::SKIP,
         p = flag::PASS,
-        O = flag::PASS_OWNER,
+        O = flag::OWNER,
         b = flag::BLOCK,
         i = flag::IN,
         o = flag::OUT,
         f = flag::FILE,
+        C = metavar::CONFIG_DIR,
         A = metavar::ANCHOR,
         T = metavar::TTL,
         I = metavar::INTERFACE,
         W = metavar::OWNER,
         D = metavar::DESTINATION,
-        F = metavar::FILE,
-        DH = destination_help,
+        P = metavar::PATH,
+        U = "USER",
+        N = "NAME",
     );
     match to {
         PrintDestination::Stdout => println!("{}", &usage),
@@ -205,7 +223,7 @@ impl Display for Color<'_> {
     }
 }
 
-fn process_status(status: &pf::Status) -> Result<(), String> {
+fn process_status(status: &pf::Status, is_verbose: bool) -> Result<(), Box<dyn Error>> {
     let display_state = |v: bool| {
         if v {
             Color::Green("ENABLED")
@@ -227,217 +245,215 @@ fn process_status(status: &pf::Status) -> Result<(), String> {
         &display_state(netlock_state),
         width = firewall.chars().count().max(netlock.chars().count()),
     );
-    let rules = status.rules();
-    if !rules.is_empty() {
-        let max_len = rules
-            .iter()
-            .flat_map(|s| s.lines())
-            .map(|s| s.chars().count())
-            .max()
-            .unwrap_or(0);
-        let print_sep = || println!("{}", "-".repeat(max_len));
-        print_sep();
-        for rule in rules {
-            print!("{}", rule);
+    if is_verbose {
+        let rules = status.rules();
+        if !rules.is_empty() {
+            let max_len = rules
+                .iter()
+                .map(|(k, v)| {
+                    (if k.is_empty() {
+                        0
+                    } else {
+                        k.chars().count() + 2
+                    })
+                    .max(v.lines().map(|s| s.chars().count()).max().unwrap_or(0))
+                })
+                .max()
+                .unwrap_or(0);
+            let print_sep = || println!("{}", "-".repeat(max_len));
             print_sep();
+            for (k, v) in rules {
+                if !k.is_empty() {
+                    println!("[{}]\n", k);
+                }
+                print!("{}", v);
+                print_sep();
+            }
+            println!();
         }
-        println!();
     }
     if !firewall_state || !netlock_state {
         return Err(format!(
             "{}: `{}`, {}: `{}`",
             firewall, firewall_state, netlock, netlock_state,
-        ));
+        )
+        .into());
     }
     Ok(())
 }
 
 #[derive(Default)]
-struct NSArgs {
-    is_help: bool,
-    is_version: bool,
-    is_verbose: bool,
+struct Opts {
+    verbose: u8,
     is_skipass_loopback: bool,
     is_use_routing: bool,
     is_block_ipv6: bool,
     is_no_lan: bool,
+    conf_dir: Option<PathBuf>,
     anchor: Option<String>,
-    min_ttl: u8,
+    ttl: u8,
     command: Option<Command>,
-    skip: Vec<String>,
-    pass: Vec<pf::Direction>,
-    pass_owners: Vec<pf::Owner>,
-    block: Vec<String>,
-    in_d: Vec<String>,
-    out_d: Vec<String>,
-    files: Vec<String>,
+    skip: HashSet<String>,
+    pass: HashSet<pf::Direction>,
+    owners: HashSet<pf::Owner>,
+    block: HashSet<String>,
+    destinations: HashSet<pf::Direction>,
+    files: HashSet<PathBuf>,
 }
 
-fn parse_args() -> Result<NSArgs, String> {
-    let argv = args().collect::<Vec<_>>();
-    let argc = argv.len();
-    if argc < 2 {
+fn parse_args() -> Result<Opts, Box<dyn Error>> {
+    let mut argv = args().skip(1);
+    if argv.len() == 0 {
         print_usage(PrintDestination::Stderr);
         return Err("Not enough arguments".into());
     }
-    let mut nsargs = NSArgs::default();
-    let mut idx = 1;
-    let err_missing_arg = |s: &str| Err(format!("Missing argument: {}", s));
-    while idx < argc {
-        let arg = &argv[idx];
+    let mut opts = Opts::default();
+    let err_missing_arg = |s: &str| Err(format!("Missing argument: {}", s).into());
+    loop {
+        let arg = match argv.next() {
+            Some(s) => s,
+            None => break,
+        };
         if !arg.starts_with('-') {
-            return Err(format!("Invalid argument: `{}`", arg));
+            return Err(format!("Invalid argument: `{}`", arg).into());
         }
-        idx += 1;
         for sub_arg in arg.chars().skip(1).map(|c| c.to_string()) {
             match sub_arg.as_str() {
                 flag::HELP => {
-                    nsargs.is_help = true;
-                    return Ok(nsargs);
+                    print_usage(PrintDestination::Stdout);
+                    exit(EX_OK);
                 }
                 flag::VERSION => {
-                    nsargs.is_version = true;
-                    return Ok(nsargs);
+                    println!("{}", env!("CARGO_PKG_VERSION"));
+                    exit(EX_OK);
                 }
-                flag::VERBOSE => nsargs.is_verbose = true,
-                flag::SKIPASS_LOOPBACK => nsargs.is_skipass_loopback = true,
-                flag::USE_ROUTING => nsargs.is_use_routing = true,
-                flag::BLOCK_IPV6 => nsargs.is_block_ipv6 = true,
-                flag::NO_LAN => nsargs.is_no_lan = true,
-                flag::ANCHOR => match argv.get(idx) {
-                    Some(s) => {
-                        nsargs.anchor = Some(s.into());
-                        idx += 1;
-                    }
-                    _ => return err_missing_arg(metavar::ANCHOR),
+                flag::VERBOSE => opts.verbose += 1,
+                flag::SKIPASS_LOOPBACK => opts.is_skipass_loopback = true,
+                flag::USE_ROUTING => opts.is_use_routing = true,
+                flag::BLOCK_IPV6 => opts.is_block_ipv6 = true,
+                flag::NO_LAN => opts.is_no_lan = true,
+                flag::CONFIG => match argv.next() {
+                    Some(s) => opts.conf_dir = Some(s.into()),
+                    None => return err_missing_arg(metavar::CONFIG_DIR),
                 },
-                flag::MINIMUM_TTL => match argv.get(idx) {
-                    Some(s) => {
-                        nsargs.min_ttl = s.parse().map_err(|e: ParseIntError| e.to_string())?;
-                        idx += 1;
-                    }
-                    _ => return err_missing_arg(metavar::TTL),
+                flag::ANCHOR => match argv.next() {
+                    Some(s) => opts.anchor = s.into(),
+                    None => return err_missing_arg(metavar::ANCHOR),
                 },
-                flag::SKIP => match argv.get(idx) {
-                    Some(s) => {
-                        nsargs.skip.push(s.into());
-                        idx += 1;
-                    }
-                    _ => return err_missing_arg(metavar::INTERFACE),
+                flag::TTL => match argv.next() {
+                    Some(s) => opts.ttl = s.parse()?,
+                    None => return err_missing_arg(metavar::TTL),
                 },
-                flag::PASS => match argv.get(idx) {
+                flag::SKIP => match argv.next() {
                     Some(s) => {
-                        nsargs.pass.push(s.into());
-                        idx += 1;
+                        opts.skip.insert(s);
                     }
-                    _ => return err_missing_arg(metavar::INTERFACE),
+                    None => return err_missing_arg(metavar::INTERFACE),
                 },
-                flag::PASS_OWNER => match argv.get(idx) {
+                flag::PASS => match argv.next() {
                     Some(s) => {
-                        nsargs.pass_owners.push(s.into());
-                        idx += 1;
+                        opts.pass.insert(s.into());
                     }
-                    _ => return err_missing_arg(metavar::INTERFACE),
+                    None => return err_missing_arg(metavar::INTERFACE),
                 },
-                flag::BLOCK => match argv.get(idx) {
+                flag::OWNER => match argv.next() {
                     Some(s) => {
-                        nsargs.block.push(s.into());
-                        idx += 1;
+                        opts.owners.insert(s.into());
                     }
-                    _ => return err_missing_arg(metavar::DESTINATION),
+                    None => return err_missing_arg(metavar::OWNER),
                 },
-                flag::IN => match argv.get(idx) {
+                flag::BLOCK => match argv.next() {
                     Some(s) => {
-                        nsargs.in_d.push(s.into());
-                        idx += 1;
+                        opts.block.insert(s);
                     }
-                    _ => return err_missing_arg(metavar::DESTINATION),
+                    None => return err_missing_arg(metavar::DESTINATION),
                 },
-                flag::OUT => match argv.get(idx) {
+                flag::IN => match argv.next() {
                     Some(s) => {
-                        nsargs.out_d.push(s.into());
-                        idx += 1;
+                        opts.destinations.insert(pf::Direction::new(s).to_in());
                     }
-                    _ => return err_missing_arg(metavar::DESTINATION),
+                    None => return err_missing_arg(metavar::DESTINATION),
                 },
-                flag::FILE => match argv.get(idx) {
+                flag::OUT => match argv.next() {
                     Some(s) => {
-                        nsargs.files.push(s.into());
-                        idx += 1;
+                        opts.destinations.insert(pf::Direction::new(s).to_out());
                     }
-                    _ => return err_missing_arg(metavar::FILE),
+                    None => return err_missing_arg(metavar::DESTINATION),
+                },
+                flag::FILE => match argv.next() {
+                    Some(s) => {
+                        opts.files.insert(s.into());
+                    }
+                    None => return err_missing_arg(metavar::PATH),
                 },
                 s => match Command::from_str(s) {
-                    Ok(cmd) => {
-                        nsargs.command = Some(cmd);
-                        match cmd {
-                            Command::Disable | Command::Status => return Ok(nsargs),
-                            _ => {}
-                        }
+                    Ok(cmd) => opts.command = cmd.into(),
+                    err => {
+                        err?;
                     }
-                    _ => return Err(format!("Invalid argument: `{}`", arg)),
                 },
             }
         }
     }
-    if nsargs.command.is_some() {
-        return Ok(nsargs);
+    if opts.command.is_some() {
+        return Ok(opts);
     }
-    err_missing_arg(&collect_to_string(Command::iter()))
+    err_missing_arg(&format!("-{{ {} }}", &to_choices_string(Command::iter())))
 }
 
 type MainResult = Result<(), Box<dyn Error>>;
 
-fn update_rules(loader: &mut pf::Loader, nsargs: &NSArgs) -> MainResult {
+fn update_rules(loader: &mut pf::Loader, opts: &Opts) -> MainResult {
     let manager = loader.manager();
-    if nsargs.is_skipass_loopback {
-        if let Some(anchor) = &nsargs.anchor {
+    manager.is_log = opts.verbose > 0;
+    if opts.is_skipass_loopback {
+        if let Some(anchor) = &opts.anchor {
             manager.set_anchor(anchor);
         }
         manager.set_skipass_loopback()?;
     }
-    if nsargs.is_use_routing {
+    if opts.is_use_routing {
         manager.extend_rules_from_routing_table()?;
     }
     let rules = manager.rules();
-    rules.min_ttl = nsargs.min_ttl;
-    rules.is_enable_log = nsargs.is_verbose;
-    rules.is_block_ipv6 = nsargs.is_block_ipv6;
-    if nsargs.is_no_lan {
+    rules.min_ttl = opts.ttl;
+    rules.is_enable_log = opts.verbose > 1;
+    rules.is_block_ipv6 = opts.is_block_ipv6;
+    if opts.is_no_lan {
         rules.lan = None;
     }
-    rules.skip_interfaces.extend_from_slice(&nsargs.skip);
-    rules.pass_interfaces.extend_from_slice(&nsargs.pass);
-    rules.pass_owners.extend_from_slice(&nsargs.pass_owners);
-    rules.block_destinations.extend_from_slice(&nsargs.block);
-    rules.in_destinations.extend_from_slice(&nsargs.in_d);
-    rules.out_destinations.extend_from_slice(&nsargs.out_d);
-    if !nsargs.files.is_empty() {
-        manager.extend_rules_from_configuration_files(&nsargs.files)?;
-    }
+    rules.skip_interfaces.extend(opts.skip.iter().cloned());
+    rules.pass_interfaces.extend(opts.pass.iter().cloned());
+    rules.pass_owners = opts.owners.clone();
+    rules.block_destinations = opts.block.clone();
+    rules
+        .pass_destinations
+        .extend(opts.destinations.iter().cloned());
+    manager.extend_rules_from_configuration_files(&opts.files.iter().collect::<Vec<_>>())?;
     Ok(())
 }
 
 fn main() -> MainResult {
-    let nsargs = parse_args()?;
-    if nsargs.is_help {
-        print_usage(PrintDestination::Stdout);
-        return Ok(());
-    }
-    if nsargs.is_version {
-        println!("{}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
-    let mut loader = pf::Loader::default();
+    let opts = match parse_args() {
+        Ok(v) => v,
+        Err(err) => {
+            eprintln!("{}", err.to_string());
+            exit(EX_USAGE);
+        }
+    };
+    let mut loader = match &opts.conf_dir {
+        Some(path) => pf::Loader::new(path, Default::default()),
+        None => Default::default(),
+    };
     let print_ok = || println!("OK");
-    match nsargs.command.expect("nsargs.command is None") {
+    match opts.command.expect("opts.command is None") {
         Command::Print => {
-            update_rules(&mut loader, &nsargs)?;
+            update_rules(&mut loader, &opts)?;
             print!("{}", &loader.manager().rules().build());
         }
         Command::Enable => {
-            update_rules(&mut loader, &nsargs)?;
-            loader.enable(nsargs.anchor)?;
+            update_rules(&mut loader, &opts)?;
+            loader.enable(opts.anchor)?;
             print_ok();
         }
         Command::Disable => {
@@ -445,11 +461,11 @@ fn main() -> MainResult {
             print_ok();
         }
         Command::Load => {
-            loader.load(nsargs.anchor)?;
+            loader.load(opts.anchor)?;
             print_ok();
         }
         Command::Status => {
-            process_status(&loader.get_status()?)?;
+            process_status(&loader.get_status()?, opts.verbose > 0)?;
         }
     }
     Ok(())

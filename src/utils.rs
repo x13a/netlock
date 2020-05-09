@@ -2,7 +2,7 @@ use std::env::var_os;
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt::{self, Display, Formatter};
-use std::fs::{set_permissions, File, Permissions};
+use std::fs::File;
 use std::io::{self, BufRead, BufReader, ErrorKind, Lines, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -17,8 +17,8 @@ pub enum ExecError {
 impl Display for ExecError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::IO(e) => e.fmt(f),
-            Self::Status(o) => write!(f, "{}", &String::from_utf8_lossy(&o.stderr)),
+            Self::IO(err) => err.fmt(f),
+            Self::Status(output) => write!(f, "{}", &String::from_utf8_lossy(&output.stderr)),
         }
     }
 }
@@ -26,15 +26,15 @@ impl Display for ExecError {
 impl Error for ExecError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::IO(e) => Some(e),
+            Self::IO(err) => Some(err),
             _ => None,
         }
     }
 }
 
 impl From<io::Error> for ExecError {
-    fn from(e: io::Error) -> Self {
-        Self::IO(e)
+    fn from(err: io::Error) -> Self {
+        Self::IO(err)
     }
 }
 
@@ -92,21 +92,22 @@ pub fn get_homepath() -> Option<PathBuf> {
 
 #[cfg(unix)]
 pub fn expanduser<P: AsRef<Path>>(path: P) -> PathBuf {
-    let p = path.as_ref();
-    if p == Path::new("~") {
+    let path = path.as_ref();
+    if path == Path::new("~") {
         get_homepath()
     } else {
-        p.strip_prefix("~/")
+        path.strip_prefix("~/")
             .ok()
-            .and_then(|r| get_homepath().map(|h| h.join(r)))
+            .and_then(|p| get_homepath().map(|hp| hp.join(p)))
     }
-    .unwrap_or_else(|| p.to_path_buf())
+    .unwrap_or_else(|| path.to_path_buf())
 }
 
 pub trait ExpandUser {
     fn expanduser(&self) -> PathBuf;
 }
 
+#[cfg(unix)]
 impl ExpandUser for Path {
     fn expanduser(&self) -> PathBuf {
         expanduser(self)
@@ -127,6 +128,7 @@ pub trait IsExecutable {
     fn is_executable(&self) -> bool;
 }
 
+#[cfg(unix)]
 impl IsExecutable for Path {
     fn is_executable(&self) -> bool {
         is_executable(self)
@@ -134,18 +136,23 @@ impl IsExecutable for Path {
 }
 
 #[cfg(unix)]
-pub fn clear_permissions<P: AsRef<Path>>(path: P, perm: Permissions) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
+pub fn is_hidden<P: AsRef<Path>>(path: P) -> bool {
+    use std::os::unix::ffi::OsStrExt;
 
-    let mode = path.as_ref().metadata()?.permissions().mode();
-    set_permissions(path, Permissions::from_mode(mode & !perm.mode()))
+    path.as_ref()
+        .file_name()
+        .map_or(false, |s| s.as_bytes().starts_with(b"."))
+}
+
+pub trait IsHidden {
+    fn is_hidden(&self) -> bool;
 }
 
 #[cfg(unix)]
-pub fn clear_go_permissions<P: AsRef<Path>>(path: P) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    clear_permissions(path, Permissions::from_mode(0o077))
+impl IsHidden for Path {
+    fn is_hidden(&self) -> bool {
+        is_hidden(self)
+    }
 }
 
 pub fn time() -> u64 {

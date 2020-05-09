@@ -1,16 +1,18 @@
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
-use std::fmt::{self, Display, Formatter, Write};
-use std::fs::{create_dir_all, write};
-use std::io;
+use std::fmt::{self, Display, Formatter, Write as FmtWrite};
+use std::fs::{create_dir_all, write, File};
+use std::io::{self, LineWriter, Write as IoWrite};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use crate::gvars;
 use crate::tools::{get_destinations_from_configuration_files, get_useful_routing_table_info};
-use crate::utils::{
-    clear_go_permissions, exec, exec_stdin, read_lines, time, ExecResult, ExpandUser, IsExecutable,
-};
+use crate::utils::{exec, exec_stdin, read_lines, time, ExecResult, ExpandUser, IsExecutable};
+
+pub use crate::gvars::DEFAULT_CONF_DIR;
+pub use crate::tools::{Direction, Owner};
 
 pub struct Loader {
     conf_dir: PathBuf,
@@ -32,11 +34,10 @@ impl<'a> Loader {
         Self { conf_dir, manager }
     }
 
-    pub fn enable(&mut self, anchor: Option<String>) -> ExecResult<()> {
+    pub fn enable(&mut self, anchor: Option<impl AsRef<str>>) -> ExecResult<()> {
         let _ = self.load_settings_conf();
         let rules = &self.manager.rules.build();
-        self.manager
-            .load(LoadFile::Stdin(rules), anchor.as_deref())?;
+        self.manager.load(LoadFile::Stdin(rules), anchor)?;
         self.make_firewall_conf(Some(rules))?;
         self.make_settings_conf()?;
         Ok(())
@@ -49,12 +50,10 @@ impl<'a> Loader {
         Ok(())
     }
 
-    pub fn load(&mut self, anchor: Option<String>) -> ExecResult<()> {
+    pub fn load(&mut self, anchor: Option<impl AsRef<str>>) -> ExecResult<()> {
         self.load_settings_conf()?;
-        self.manager.load(
-            LoadFile::Path(&self.get_firewall_conf_path()),
-            anchor.as_deref(),
-        )?;
+        self.manager
+            .load(LoadFile::Path(&self.get_firewall_conf_path()), anchor)?;
         self.make_settings_conf()?;
         Ok(())
     }
@@ -72,57 +71,55 @@ impl<'a> Loader {
         create_dir_all(&self.conf_dir)?;
         let conf_path = &self.get_firewall_conf_path();
         match content {
-            Some(s) => write(conf_path, s)?,
-            _ => write(conf_path, &self.manager.rules.build())?,
+            Some(rules) => write(conf_path, rules),
+            None => write(conf_path, &self.manager.rules.build()),
         }
-        clear_go_permissions(conf_path)
     }
 
     fn make_settings_conf(&self) -> io::Result<()> {
         create_dir_all(&self.conf_dir)?;
         let conf_path = &self.get_settings_conf_path();
-        write(
-            conf_path,
-            [
-                (
-                    Self::SETTINGS_MANAGER_STATE,
-                    &self.manager.state.to_string(),
-                ),
-                (Self::SETTINGS_MANAGER_ANCHOR, &self.manager.anchor),
-                #[cfg(not(target_os = "macos"))]
-                (
-                    Self::SETTINGS_CTL_STATE,
-                    &self.manager.ctl.state.to_string(),
-                ),
-                #[cfg(target_os = "macos")]
-                (Self::SETTINGS_CTL_TOKEN, &self.manager.ctl.token),
-            ]
-            .iter()
-            .map(|&v| format!("{}{}{}", v.0, Self::SETTINGS_SEP, v.1))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        )?;
-        clear_go_permissions(conf_path)
+        let mut file = LineWriter::new(File::create(conf_path)?);
+        for (k, v) in &[
+            (
+                Self::SETTINGS_MANAGER_STATE,
+                &self.manager.state.to_string(),
+            ),
+            (Self::SETTINGS_MANAGER_ANCHOR, &self.manager.anchor),
+            #[cfg(not(target_os = "macos"))]
+            (
+                Self::SETTINGS_CTL_STATE,
+                &self.manager.ctl.state.to_string(),
+            ),
+            #[cfg(target_os = "macos")]
+            (Self::SETTINGS_CTL_TOKEN, &self.manager.ctl.token),
+        ] {
+            writeln!(&mut file, "{}{}{}", k, Self::SETTINGS_SEP, v)?;
+        }
+        Ok(())
     }
 
     fn load_settings_conf(&mut self) -> io::Result<()> {
         for line in read_lines(&self.get_settings_conf_path())? {
             let line = line?;
-            let opts = line.split(Self::SETTINGS_SEP).collect::<Vec<_>>();
-            if opts.len() < 2 {
+            if line.starts_with('#') {
                 continue;
             }
-            match opts[0] {
+            let option = line.split(Self::SETTINGS_SEP).collect::<Vec<_>>();
+            if option.len() != 2 {
+                continue;
+            }
+            match option[0] {
                 Self::SETTINGS_MANAGER_STATE => {
-                    self.manager.state = opts[1].parse().unwrap_or(self.manager.state)
+                    self.manager.state = option[1].parse().unwrap_or(self.manager.state)
                 }
-                Self::SETTINGS_MANAGER_ANCHOR => self.manager.anchor = opts[1].into(),
+                Self::SETTINGS_MANAGER_ANCHOR => self.manager.anchor = option[1].into(),
                 #[cfg(not(target_os = "macos"))]
                 Self::SETTINGS_CTL_STATE => {
-                    self.manager.ctl.state = opts[1].parse().unwrap_or(self.manager.ctl.state);
+                    self.manager.ctl.state = option[1].parse().unwrap_or(self.manager.ctl.state);
                 }
                 #[cfg(target_os = "macos")]
-                Self::SETTINGS_CTL_TOKEN => self.manager.ctl.token = opts[1].into(),
+                Self::SETTINGS_CTL_TOKEN => self.manager.ctl.token = option[1].into(),
                 _ => {}
             }
         }
@@ -147,7 +144,7 @@ impl Default for Loader {
 pub struct Status {
     firewall_state: bool,
     netlock_state: bool,
-    rules: Vec<String>,
+    rules: HashMap<String, String>,
 }
 
 impl Status {
@@ -159,7 +156,7 @@ impl Status {
         self.netlock_state
     }
 
-    pub fn rules(&self) -> &[String] {
+    pub fn rules(&self) -> &HashMap<String, String> {
         &self.rules
     }
 }
@@ -167,24 +164,26 @@ impl Status {
 pub struct Manager {
     state: bool,
     anchor: String,
+    pub is_log: bool,
     ctl: Ctl,
     rules: Rules,
 }
 
 impl<'a> Manager {
-    pub const ANCHOR_REPLACE_FROM: char = '$';
-    pub const ANCHOR_REPLACE_TO: &'a str = "zz.netlock";
+    pub const ANCHOR_REPLACE_FROM: &'a str = "$";
+    pub const ANCHOR_REPLACE_TO: &'a str = "248.netlock";
 
     pub fn new(ctl: Ctl, rules: Rules) -> Self {
         Self {
             state: false,
             anchor: "".into(),
+            is_log: false,
             ctl,
             rules,
         }
     }
 
-    pub fn enable(&mut self, new_anchor: Option<&str>) -> ExecResult<()> {
+    pub fn enable(&mut self, new_anchor: Option<impl AsRef<str>>) -> ExecResult<()> {
         self.load(LoadFile::Stdin(&self.rules.build()), new_anchor)
     }
 
@@ -196,22 +195,75 @@ impl<'a> Manager {
     }
 
     pub fn get_status(&self) -> ExecResult<Status> {
-        let mut rules = vec![self.ctl.show(ShowModifier::Rules, "", false)?];
-        if !self.anchor.is_empty() {
-            for anchor in self
-                .ctl
-                .show(ShowModifier::Anchors, "", true)?
-                .split_whitespace()
-            {
-                let ruleset = self.ctl.show(ShowModifier::Rules, anchor, false)?;
-                if !ruleset.is_empty() {
-                    rules.push(ruleset);
+        let mut netlock_state = self.state;
+        let mut rules = HashMap::new();
+        let main_ruleset = self.ctl.show(ShowModifier::Rules, "", false)?;
+        if !main_ruleset.is_empty() {
+            let mr_anchor = "";
+            rules.insert(mr_anchor.to_string(), main_ruleset);
+            if self.anchor.is_empty() {
+                if netlock_state {
+                    let mut has_block_table = false;
+                    let mut has_in_table = false;
+                    let mut has_out_table = false;
+                    let to_table_pat = |s: &str| format!("<{}>", s);
+                    let block_table_pat = &to_table_pat(&self.rules.block_table_name);
+                    let in_table_pat = &to_table_pat(&self.rules.in_table_name);
+                    let out_table_pat = &to_table_pat(&self.rules.out_table_name);
+                    for line in rules[mr_anchor].lines() {
+                        if !has_block_table && line.contains(block_table_pat) {
+                            has_block_table = true;
+                        } else if !has_in_table && line.contains(in_table_pat) {
+                            has_in_table = true;
+                        } else if !has_out_table && line.contains(out_table_pat) {
+                            has_out_table = true;
+                        }
+                        if has_block_table && has_in_table && has_out_table {
+                            break;
+                        }
+                    }
+                    netlock_state &= has_block_table && has_in_table && has_out_table;
+                }
+                if netlock_state {
+                    let mut has_block_table = false;
+                    let mut has_in_table = false;
+                    let mut has_out_table = false;
+                    for table in self
+                        .ctl
+                        .show(ShowModifier::Tables, mr_anchor, false)?
+                        .split_whitespace()
+                    {
+                        if !has_block_table && table == self.rules.block_table_name {
+                            has_block_table = true;
+                        } else if !has_in_table && table == self.rules.in_table_name {
+                            has_in_table = true;
+                        } else if !has_out_table && table == self.rules.out_table_name {
+                            has_out_table = true;
+                        }
+                        if has_block_table && has_in_table && has_out_table {
+                            break;
+                        }
+                    }
+                    netlock_state &= has_block_table && has_in_table && has_out_table;
+                }
+            } else {
+                for anchor in self
+                    .ctl
+                    .show(ShowModifier::Anchors, "", true)?
+                    .split_whitespace()
+                {
+                    let ruleset = self.ctl.show(ShowModifier::Rules, anchor, false)?;
+                    if !ruleset.is_empty() {
+                        rules.insert(anchor.into(), ruleset);
+                    }
                 }
             }
+        } else {
+            netlock_state = false;
         }
         Ok(Status {
             firewall_state: self.ctl.is_enabled()?,
-            netlock_state: self.state,
+            netlock_state,
             rules,
         })
     }
@@ -224,11 +276,11 @@ impl<'a> Manager {
         &self.anchor
     }
 
-    pub fn set_anchor(&mut self, s: &str) -> bool {
+    pub fn set_anchor(&mut self, anchor: impl AsRef<str>) -> bool {
         if self.state {
             return false;
         }
-        self.anchor = self.format_anchor(s);
+        self.anchor = self.format_anchor(anchor.as_ref());
         true
     }
 
@@ -239,9 +291,7 @@ impl<'a> Manager {
     pub fn set_skipass_loopback(&mut self) -> ExecResult<()> {
         let loopback_group = "lo".to_string();
         if self.anchor.is_empty() {
-            if !self.rules.skip_interfaces.contains(&loopback_group) {
-                self.rules.skip_interfaces.push(loopback_group);
-            }
+            self.rules.skip_interfaces.insert(loopback_group);
         } else {
             for interface in self
                 .ctl
@@ -249,11 +299,12 @@ impl<'a> Manager {
                 .lines()
                 .map(|s| s.split_whitespace().collect::<Vec<_>>())
                 .filter(|v| v.len() == 1) // v[1] == "(skip)"
-                .map(|v| Direction::new(v[0]))
+                .map(|v| v[0])
             {
-                if !self.rules.pass_interfaces.contains(&interface) {
-                    self.rules.pass_interfaces.push(interface);
+                if self.is_log {
+                    eprintln!("[skipass_loopback] interface: `{}`", interface);
                 }
+                self.rules.pass_interfaces.insert(interface.into());
             }
         }
         Ok(())
@@ -263,14 +314,21 @@ impl<'a> Manager {
         let info = get_useful_routing_table_info()?;
         let interface = info.interface();
         if !interface.is_empty() {
-            let pass_interface = Direction::new(interface).to_out();
-            if !self.rules.pass_interfaces.contains(&pass_interface) {
-                self.rules.pass_interfaces.push(pass_interface);
-            }
+            self.rules
+                .pass_interfaces
+                .insert(Direction::new(interface).to_out());
         }
-        let destination = info.destination().to_string();
-        if !destination.is_empty() && !self.rules.out_destinations.contains(&destination) {
-            self.rules.out_destinations.push(destination);
+        let destination = info.destination();
+        if !destination.is_empty() {
+            self.rules
+                .pass_destinations
+                .insert(Direction::new(destination).to_out());
+        }
+        if self.is_log {
+            eprintln!(
+                "[routing_table] interface: `{}`, destination: `{}`",
+                interface, destination,
+            );
         }
         Ok(())
     }
@@ -279,35 +337,38 @@ impl<'a> Manager {
         &mut self,
         paths: &[impl AsRef<Path>],
     ) -> io::Result<()> {
-        for destination in get_destinations_from_configuration_files(paths)? {
-            if !self.rules.out_destinations.contains(&destination) {
-                self.rules.out_destinations.push(destination);
+        for destination in &get_destinations_from_configuration_files(paths)? {
+            if self.is_log {
+                eprintln!("[configuration_files] destination: `{}`", destination);
             }
+            self.rules
+                .pass_destinations
+                .insert(Direction::new(destination).to_out());
         }
         Ok(())
     }
 
-    fn load(&mut self, file: LoadFile, new_anchor: Option<&str>) -> ExecResult<()> {
+    fn load(&mut self, file: LoadFile, new_anchor: Option<impl AsRef<str>>) -> ExecResult<()> {
         self.enable_firewall()?;
         match new_anchor {
-            Some(s) => {
+            Some(new_anchor) => {
                 let anchor = self.anchor.clone();
-                let new_anchor = self.format_anchor(s);
+                let new_anchor = self.format_anchor(new_anchor.as_ref());
                 self.ctl.load(file, &new_anchor)?;
                 if self.state && anchor != new_anchor {
                     self.reset(&anchor)?;
                 }
                 self.anchor = new_anchor;
             }
-            _ => self.ctl.load(file, &self.anchor)?,
+            None => self.ctl.load(file, &self.anchor)?,
         }
         self.state = true;
         self.ctl.flush(FlushModifier::States, "")?;
         Ok(())
     }
 
-    fn format_anchor(&self, s: &str) -> String {
-        s.replace(Self::ANCHOR_REPLACE_FROM, Self::ANCHOR_REPLACE_TO)
+    fn format_anchor(&self, anchor: &str) -> String {
+        anchor.replace(Self::ANCHOR_REPLACE_FROM, Self::ANCHOR_REPLACE_TO)
     }
 
     fn reset(&self, anchor: &str) -> ExecResult<()> {
@@ -510,14 +571,16 @@ impl<'a> Ctl {
     #[cfg(target_os = "macos")]
     fn enable(&mut self) -> ExecResult<()> {
         let mut token = String::new();
-        for arr in String::from_utf8_lossy(&self.exec(&[Self::FLAG_ENABLE])?.stderr)
+        for opt in String::from_utf8_lossy(&self.exec(&[Self::FLAG_ENABLE])?.stderr)
             .to_lowercase()
             .lines()
             .filter(|&s| s.contains("token :"))
-            .map(|s| s.split(':').collect::<Vec<_>>())
+            .map(|s| s.split(':').nth(1))
         {
-            token = arr[1].trim().into();
-            break;
+            if let Some(s) = &opt {
+                token = s.trim().into();
+                break;
+            }
         }
         assert!(!token.is_empty() && token.chars().all(|c| c.is_ascii_digit()));
         self.token = token;
@@ -571,19 +634,19 @@ impl<'a> Ctl {
 
     fn load(&self, file: LoadFile, anchor: &str) -> ExecResult<()> {
         match file {
-            LoadFile::Path(p) => {
-                let mut args = vec![OsStr::new(Self::FLAG_FILE), p.as_os_str()];
+            LoadFile::Path(path) => {
+                let mut args = vec![OsStr::new(Self::FLAG_FILE), path.as_os_str()];
                 if !anchor.is_empty() {
                     args.extend_from_slice(&[OsStr::new(Self::FLAG_ANCHOR), OsStr::new(anchor)]);
                 }
                 self.exec(&args)?;
             }
-            LoadFile::Stdin(s) => {
+            LoadFile::Stdin(rules) => {
                 let mut args = vec![Self::FLAG_FILE, "-"];
                 if !anchor.is_empty() {
                     args.extend_from_slice(&[Self::FLAG_ANCHOR, anchor]);
                 }
-                exec_stdin(&self.ctl_path, &args, s)?;
+                exec_stdin(&self.ctl_path, &args, rules)?;
             }
         }
         Ok(())
@@ -598,9 +661,9 @@ impl<'a> Ctl {
         if verbose {
             args.push(Self::FLAG_VERBOSE);
         }
-        if let ShowModifier::Interfaces(s) = modifier {
-            if !s.is_empty() {
-                args.extend_from_slice(&[Self::FLAG_INTERFACE, s]);
+        if let ShowModifier::Interfaces(interface) = modifier {
+            if !interface.is_empty() {
+                args.extend_from_slice(&[Self::FLAG_INTERFACE, interface]);
             }
         }
         Ok(String::from_utf8_lossy(&self.exec(&args)?.stdout).into())
@@ -762,91 +825,6 @@ impl Default for ICMP {
     }
 }
 
-#[derive(PartialEq, Clone)]
-pub struct Direction(String);
-
-impl Direction {
-    pub const IN: char = '<';
-    pub const OUT: char = '>';
-
-    pub fn new(s: &str) -> Self {
-        Self(s.into())
-    }
-
-    pub fn unwrap(&self) -> String {
-        self.0
-            .trim_start_matches(|c| c == Self::IN || c == Self::OUT)
-            .into()
-    }
-
-    pub fn is_in(&self) -> bool {
-        self.0.starts_with(Self::IN)
-    }
-
-    pub fn is_out(&self) -> bool {
-        self.0.starts_with(Self::OUT)
-    }
-
-    pub fn has_no_direction(&self) -> bool {
-        !self.is_in() && !self.is_out()
-    }
-
-    pub fn to_in_string(&self) -> String {
-        format!("{}{}", Self::IN, &self.unwrap())
-    }
-
-    pub fn to_out_string(&self) -> String {
-        format!("{}{}", Self::OUT, &self.unwrap())
-    }
-
-    pub fn to_in(&self) -> Self {
-        Self(self.to_in_string())
-    }
-
-    pub fn to_out(&self) -> Self {
-        Self(self.to_out_string())
-    }
-}
-
-impl<S: AsRef<str>> From<S> for Direction {
-    fn from(s: S) -> Self {
-        Self::new(s.as_ref())
-    }
-}
-
-#[derive(Clone)]
-pub struct Owner(String);
-
-impl<'a> Owner {
-    pub const USER: &'a str = "u:";
-    pub const GROUP: &'a str = "g:";
-
-    pub fn new(s: &str) -> Self {
-        Self(s.into())
-    }
-
-    pub fn unwrap(&self) -> String {
-        self.0
-            .trim_start_matches(Self::USER)
-            .trim_start_matches(Self::GROUP)
-            .into()
-    }
-
-    pub fn is_user(&self) -> bool {
-        !self.is_group()
-    }
-
-    pub fn is_group(&self) -> bool {
-        self.0.starts_with(Self::GROUP)
-    }
-}
-
-impl<S: AsRef<str>> From<S> for Owner {
-    fn from(s: S) -> Self {
-        Self::new(s.as_ref())
-    }
-}
-
 pub struct Rules {
     block_table_name: String,
     in_table_name: String,
@@ -861,12 +839,11 @@ pub struct Rules {
     pub is_block_ipv6: bool,
     pub lan: Option<Lan>,
     pub icmp: Option<ICMP>,
-    pub skip_interfaces: Vec<String>,
-    pub pass_interfaces: Vec<Direction>,
-    pub pass_owners: Vec<Owner>,
-    pub block_destinations: Vec<String>,
-    pub in_destinations: Vec<String>,
-    pub out_destinations: Vec<String>,
+    pub skip_interfaces: HashSet<String>,
+    pub pass_interfaces: HashSet<Direction>,
+    pub pass_owners: HashSet<Owner>,
+    pub block_destinations: HashSet<String>,
+    pub pass_destinations: HashSet<Direction>,
 }
 
 impl<'a> Rules {
@@ -874,7 +851,7 @@ impl<'a> Rules {
     pub const DEFAULT_IN_TABLE_NAME: &'a str = "netlock_pass_in";
     pub const DEFAULT_OUT_TABLE_NAME: &'a str = "netlock_pass_out";
 
-    pub fn new(block_table_name: &str, in_table_name: &str, out_table_name: &str) -> Self {
+    pub fn new<S: Into<String>>(block_table_name: S, in_table_name: S, out_table_name: S) -> Self {
         Self {
             block_table_name: block_table_name.into(),
             in_table_name: in_table_name.into(),
@@ -883,91 +860,149 @@ impl<'a> Rules {
         }
     }
 
-    // based on `true story` (Eddie AirVPN)
+    // based on `true story` (Eddie by AirVPN)
     #[allow(unused_must_use)]
     pub fn build(&self) -> String {
         let mut s = String::new();
-        writeln!(&mut s, "#{}", &time());
-        let mut pass_in_interfaces = vec![];
-        let mut pass_out_interfaces = vec![];
-        let mut pass_interfaces = vec![];
-        for pass_interface in &self.pass_interfaces {
-            if pass_interface.is_in() {
-                &mut pass_in_interfaces
-            } else if pass_interface.is_out() {
-                &mut pass_out_interfaces
-            } else {
-                &mut pass_interfaces
-            }
-            .push(pass_interface.unwrap());
+        writeln!(&mut s, "# {}\n", &time());
+        writeln!(&mut s, "{}", &self.build_options());
+        writeln!(&mut s, "{}", &self.build_scrub());
+        writeln!(&mut s, "{}", &self.build_incoming());
+        writeln!(&mut s, "{}", &self.build_outgoing());
+        writeln!(&mut s, "{}", &self.build_antispoofing());
+        writeln!(&mut s, "{}", &self.build_blocklist());
+        writeln!(&mut s, "{}", &self.build_interfaces());
+        writeln!(&mut s, "{}", &self.build_owners());
+        writeln!(&mut s, "{}", &self.build_ipv6());
+        writeln!(&mut s, "{}", &self.build_lan());
+        writeln!(&mut s, "{}", &self.build_icmp());
+        write!(&mut s, "{}", &self.build_destinations());
+        s
+    }
+
+    #[allow(unused_must_use)]
+    fn build_macros(
+        &self,
+        prefix: &str,
+        interfaces: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> (String, Vec<String>) {
+        let mut s = String::new();
+        let mut macros = vec![];
+        for (idx, interface) in interfaces.into_iter().enumerate() {
+            let macro_var = &format!("{}{}_if", prefix, &idx);
+            writeln!(&mut s, "{} = \"{}\"", macro_var, interface.as_ref());
+            macros.push(format!("${}", macro_var));
         }
-        let mut build_macros = |prefix: &str, interfaces: &[String]| {
-            let mut results = vec![];
-            for (idx, interface) in interfaces.iter().enumerate() {
-                let macro_var = &format!("{}{}_if", prefix, &idx);
-                writeln!(&mut s, "{} = \"{}\"", macro_var, interface);
-                results.push(format!("${}", macro_var));
+        (s, macros)
+    }
+
+    fn build_table(
+        &self,
+        table_name: &str,
+        destinations: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> String {
+        let mut addresses = vec![];
+        let mut files = vec![];
+        for destination in destinations {
+            let destination = destination.as_ref();
+            if destination.starts_with('/') {
+                files.push(format!("file \"{}\"", destination));
+            } else {
+                addresses.push(destination.to_string());
             }
-            results
-        };
-        let skip_interfaces = build_macros("skip", &self.skip_interfaces);
-        let pass_in_interfaces = build_macros("pass_in", &pass_in_interfaces);
-        let pass_out_interfaces = build_macros("pass_out", &pass_out_interfaces);
-        let pass_interfaces = build_macros("pass", &pass_interfaces);
-        let mut build_tables = |table_name: &str, destinations: &[String]| {
-            let mut addresses = vec![];
-            let mut files = vec![];
-            for destination in destinations {
-                if destination.starts_with('/') {
-                    files.push(format!("file \"{}\"", destination));
-                } else {
-                    addresses.push(destination.to_string());
-                }
-            }
-            writeln!(
-                &mut s,
-                "table <{}> {{ {} }} {}",
-                table_name,
-                addresses.join(", "),
-                files.join(" "),
-            );
-        };
-        build_tables(&self.block_table_name, &self.block_destinations);
-        build_tables(&self.in_table_name, &self.in_destinations);
-        build_tables(&self.out_table_name, &self.out_destinations);
+        }
+        format!(
+            "table <{}> {{ {} }} {}\n",
+            table_name,
+            addresses.join(", "),
+            files.join(" "),
+        )
+    }
+
+    #[allow(unused_must_use)]
+    pub fn build_options(&self) -> String {
+        let mut s = String::new();
+        writeln!(&mut s, "# OPTIONS");
         writeln!(&mut s, "set block-policy {}", &self.block_policy);
         writeln!(&mut s, "set state-policy {}", &self.state_policy);
-        if !skip_interfaces.is_empty() {
-            writeln!(&mut s, "set skip on {{ {} }}", &skip_interfaces.join(", "));
+        if !self.skip_interfaces.is_empty() {
+            let (macros, interfaces) = self.build_macros("skip", &self.skip_interfaces);
+            write!(&mut s, "{}", &macros);
+            writeln!(&mut s, "set skip on {{ {} }}", &interfaces.join(", "));
         }
+        s
+    }
+
+    #[allow(unused_must_use)]
+    pub fn build_scrub(&self) -> String {
+        let mut s = String::new();
+        writeln!(&mut s, "# SCRUB");
         writeln!(&mut s, "scrub in all");
         if self.min_ttl > 0 {
             writeln!(&mut s, "scrub out all min-ttl {}", self.min_ttl);
         }
-        let log = if self.is_enable_log { "log" } else { "" };
+        s
+    }
+
+    #[allow(unused_must_use)]
+    pub fn build_incoming(&self) -> String {
+        let mut s = String::new();
+        writeln!(&mut s, "# INCOMING");
         match self.incoming {
             Action::Block => {
-                writeln!(&mut s, "block {} in {} all", &self.block_policy, log);
+                writeln!(
+                    &mut s,
+                    "block {} in {} all",
+                    &self.block_policy,
+                    self.get_log()
+                );
             }
             Action::Pass => {
                 writeln!(&mut s, "pass in all");
             }
         }
+        s
+    }
+
+    #[allow(unused_must_use)]
+    pub fn build_outgoing(&self) -> String {
+        let mut s = String::new();
+        writeln!(&mut s, "# OUTGOING");
         match self.outgoing {
             Action::Block => {
-                writeln!(&mut s, "block return out {} all", log);
+                writeln!(&mut s, "block return out {} all", self.get_log());
             }
             Action::Pass => {
                 writeln!(&mut s, "pass out all");
             }
         }
+        s
+    }
+
+    #[allow(unused_must_use)]
+    pub fn build_antispoofing(&self) -> String {
+        let mut s = String::new();
+        writeln!(&mut s, "# ANTISPOOFING");
         if let Some(antispoofing) = &self.antispoofing {
             writeln!(
                 &mut s,
                 "block drop in {} quick from {} to any label \"ANTISPOOFING\"",
-                log, antispoofing,
+                self.get_log(),
+                antispoofing,
             );
         }
+        s
+    }
+
+    #[allow(unused_must_use)]
+    pub fn build_blocklist(&self) -> String {
+        let mut s = String::new();
+        writeln!(&mut s, "# BLOCKLIST");
+        write!(
+            &mut s,
+            "{}",
+            &self.build_table(&self.block_table_name, &self.block_destinations),
+        );
         writeln!(
             &mut s,
             "block drop in quick from <{}> to any label \"BLOCKLIST_IN\"",
@@ -978,27 +1013,51 @@ impl<'a> Rules {
             "block return out quick from any to <{}> label \"BLOCKLIST_OUT\"",
             &self.block_table_name,
         );
-        if !pass_in_interfaces.is_empty() {
+        s
+    }
+
+    #[allow(unused_must_use)]
+    pub fn build_interfaces(&self) -> String {
+        let mut s = String::new();
+        writeln!(&mut s, "# INTERFACES");
+        let mut in_interfaces = vec![];
+        let mut out_interfaces = vec![];
+        for direct_interface in &self.pass_interfaces {
+            let interface = direct_interface.safe_unwrap();
+            if direct_interface.is_in() {
+                in_interfaces.push(interface);
+            } else if direct_interface.is_out() {
+                out_interfaces.push(interface);
+            } else {
+                in_interfaces.push(interface);
+                out_interfaces.push(interface);
+            }
+        }
+        let (in_macros, in_interfaces) = self.build_macros("pass_in", &in_interfaces);
+        let (out_macros, out_interfaces) = self.build_macros("pass_out", &out_interfaces);
+        if !in_interfaces.is_empty() {
+            write!(&mut s, "{}", &in_macros);
             writeln!(
                 &mut s,
                 "pass in quick on {{ {} }} all",
-                &pass_in_interfaces.join(", "),
+                &in_interfaces.join(", "),
             );
         }
-        if !pass_out_interfaces.is_empty() {
+        if !out_interfaces.is_empty() {
+            write!(&mut s, "{}", &out_macros);
             writeln!(
                 &mut s,
                 "pass out quick on {{ {} }} all",
-                &pass_out_interfaces.join(", "),
+                &out_interfaces.join(", "),
             );
         }
-        if !pass_interfaces.is_empty() {
-            writeln!(
-                &mut s,
-                "pass quick on {{ {} }} all",
-                &pass_interfaces.join(", "),
-            );
-        }
+        s
+    }
+
+    #[allow(unused_must_use)]
+    pub fn build_owners(&self) -> String {
+        let mut s = String::new();
+        writeln!(&mut s, "# OWNERS");
         let mut users = vec![];
         let mut groups = vec![];
         for owner in &self.pass_owners {
@@ -1007,7 +1066,7 @@ impl<'a> Rules {
             } else {
                 &mut users
             }
-            .push(owner.unwrap());
+            .push(owner.safe_unwrap());
         }
         if !users.is_empty() {
             writeln!(&mut s, "pass quick all user {{ {} }}", &users.join(", "));
@@ -1015,10 +1074,24 @@ impl<'a> Rules {
         if !groups.is_empty() {
             writeln!(&mut s, "pass quick all group {{ {} }}", &groups.join(", "));
         }
+        s
+    }
+
+    #[allow(unused_must_use)]
+    pub fn build_ipv6(&self) -> String {
+        let mut s = String::new();
+        writeln!(&mut s, "# IPV6");
         if self.is_block_ipv6 {
             writeln!(&mut s, "block {} in quick inet6 all", &self.block_policy);
             writeln!(&mut s, "block return out quick inet6 all");
         }
+        s
+    }
+
+    #[allow(unused_must_use)]
+    pub fn build_lan(&self) -> String {
+        let mut s = String::new();
+        writeln!(&mut s, "# LAN");
         if let Some(lan) = &self.lan {
             let ipv4nrm = gvars::IPV4_NOT_ROUTABLE_MULTICASTS.join(", ");
             let ipv6nrm = gvars::IPV6_NOT_ROUTABLE_MULTICASTS.join(", ");
@@ -1074,6 +1147,13 @@ impl<'a> Rules {
                 );
             }
         }
+        s
+    }
+
+    #[allow(unused_must_use)]
+    pub fn build_icmp(&self) -> String {
+        let mut s = String::new();
+        writeln!(&mut s, "# ICMP");
         match self.icmp {
             Some(ICMP::Echoreq) => {
                 let mut pass_icmp = |af: &str, proto: &str, type_prefix: &str, label: &str| {
@@ -1103,6 +1183,36 @@ impl<'a> Rules {
             }
             _ => {}
         }
+        s
+    }
+
+    #[allow(unused_must_use)]
+    pub fn build_destinations(&self) -> String {
+        let mut s = String::new();
+        writeln!(&mut s, "# DESTINATIONS");
+        let mut in_destinations = vec![];
+        let mut out_destinations = vec![];
+        for direct_destination in &self.pass_destinations {
+            let destination = direct_destination.safe_unwrap();
+            if direct_destination.is_in() {
+                in_destinations.push(destination);
+            } else if direct_destination.is_out() {
+                out_destinations.push(destination);
+            } else {
+                in_destinations.push(destination);
+                out_destinations.push(destination);
+            }
+        }
+        write!(
+            &mut s,
+            "{}",
+            &self.build_table(&self.in_table_name, &in_destinations),
+        );
+        write!(
+            &mut s,
+            "{}",
+            &self.build_table(&self.out_table_name, &out_destinations),
+        );
         writeln!(
             &mut s,
             "pass in quick from <{}> to any",
@@ -1114,6 +1224,14 @@ impl<'a> Rules {
             &self.out_table_name,
         );
         s
+    }
+
+    fn get_log(&self) -> &str {
+        if self.is_enable_log {
+            "log"
+        } else {
+            ""
+        }
     }
 }
 
@@ -1133,12 +1251,11 @@ impl Default for Rules {
             is_block_ipv6: false,
             lan: Some(Default::default()),
             icmp: Some(Default::default()),
-            skip_interfaces: vec![],
-            pass_interfaces: vec![],
-            pass_owners: vec![],
-            block_destinations: vec![],
-            in_destinations: vec![],
-            out_destinations: vec![],
+            skip_interfaces: Default::default(),
+            pass_interfaces: Default::default(),
+            pass_owners: Default::default(),
+            block_destinations: Default::default(),
+            pass_destinations: Default::default(),
         }
     }
 }
