@@ -100,5 +100,3 @@ has no built-in dns encryption, use
 
 ## Friends
 - [killswitch](https://github.com/vpn-kill-switch/killswitch)
-- [AirVPN](https://airvpn.org/)
-- [Mullvad](https://mullvad.net/)
