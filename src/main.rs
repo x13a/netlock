@@ -10,6 +10,7 @@ use std::str::FromStr;
 use netlock::pf;
 
 const EX_OK: i32 = 0;
+const EX_ERR: i32 = 1;
 const EX_USAGE: i32 = 64;
 
 mod flag {
@@ -433,7 +434,7 @@ fn update_rules(loader: &mut pf::Loader, opts: &Opts) -> MainResult {
     Ok(())
 }
 
-fn main() -> MainResult {
+fn _main() -> MainResult {
     let opts = match parse_args() {
         Ok(v) => v,
         Err(err) => {
@@ -469,4 +470,14 @@ fn main() -> MainResult {
         }
     }
     Ok(())
+}
+
+fn main() -> MainResult {
+    match _main() {
+        Ok(v) => Ok(v),
+        Err(err) => {
+            eprintln!("{}", err.to_string().trim_end());
+            exit(EX_ERR);
+        }
+    }
 }
