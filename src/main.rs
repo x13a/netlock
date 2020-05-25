@@ -10,7 +10,6 @@ use std::str::FromStr;
 use netlock::pf;
 
 const EXIT_SUCCESS: i32 = 0;
-const EXIT_FAILURE: i32 = 1;
 const EXIT_USAGE: i32 = 2;
 
 mod flag {
@@ -475,9 +474,6 @@ fn _main() -> MainResult {
 fn main() -> MainResult {
     match _main() {
         Ok(v) => Ok(v),
-        Err(err) => {
-            eprintln!("{}", err.to_string().trim_end());
-            exit(EXIT_FAILURE);
-        }
+        Err(err) => Err(err.to_string().trim_end().into()),
     }
 }
