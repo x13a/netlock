@@ -9,9 +9,9 @@ use std::str::FromStr;
 
 use netlock::pf;
 
-const EX_OK: i32 = 0;
-const EX_ERR: i32 = 1;
-const EX_USAGE: i32 = 64;
+const EXIT_SUCCESS: i32 = 0;
+const EXIT_FAILURE: i32 = 1;
+const EXIT_USAGE: i32 = 2;
 
 mod flag {
     pub const HELP: &str = "h";
@@ -322,11 +322,11 @@ fn parse_args() -> Result<Opts, Box<dyn Error>> {
             match sub_arg.as_str() {
                 flag::HELP => {
                     print_usage(PrintDestination::Stdout);
-                    exit(EX_OK);
+                    exit(EXIT_SUCCESS);
                 }
                 flag::VERSION => {
                     println!("{}", env!("CARGO_PKG_VERSION"));
-                    exit(EX_OK);
+                    exit(EXIT_SUCCESS);
                 }
                 flag::VERBOSE => opts.verbose += 1,
                 flag::SKIPASS_LOOPBACK => opts.is_skipass_loopback = true,
@@ -439,7 +439,7 @@ fn _main() -> MainResult {
         Ok(v) => v,
         Err(err) => {
             eprintln!("{}", err.to_string());
-            exit(EX_USAGE);
+            exit(EXIT_USAGE);
         }
     };
     let mut loader = match &opts.conf_dir {
@@ -477,7 +477,7 @@ fn main() -> MainResult {
         Ok(v) => Ok(v),
         Err(err) => {
             eprintln!("{}", err.to_string().trim_end());
-            exit(EX_ERR);
+            exit(EXIT_FAILURE);
         }
     }
 }
