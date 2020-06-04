@@ -7,7 +7,7 @@ Based on [Eddie by AirVPN](https://github.com/AirVPN/Eddie).
 ## Installation
 ```sh
 $ make
-$ make install
+$ sudo make install
 ```
 or
 ```sh
