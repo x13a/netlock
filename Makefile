@@ -1,6 +1,7 @@
 PREFIX ?= /usr/local
 SBINDIR ?= $(PREFIX)/sbin
 NAME := netlock
+DEST := $(SBINDIR)/$(NAME)
 
 all: build
 
@@ -14,11 +15,12 @@ cargo-uninstall:
 	cargo uninstall --locked $(NAME)
 
 install:
-	install -d $(SBINDIR)/
-	install ./target/release/$(NAME) $(SBINDIR)/
+	install -o 501 -g staff -d $(SBINDIR)/
+	install -o root -g wheel -f uchg ./target/release/$(NAME) $(SBINDIR)/
 
 uninstall:
-	rm -f $(SBINDIR)/$(NAME)
+	chflags nouchg $(DEST)
+	rm -f $(DEST)
 
 clean:
 	cargo clean
