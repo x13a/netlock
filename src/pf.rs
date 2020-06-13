@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
-use std::fmt::{self, Display, Formatter, Write as FmtWrite};
+use std::fmt::{self, Display, Formatter};
 use std::fs::{create_dir_all, write, File};
-use std::io::{self, LineWriter, Write as IoWrite};
+use std::io::{self, LineWriter, Result as IoResult, Write as IoWrite};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -863,163 +863,116 @@ impl<'a> Rules {
     // based on `true story` (Eddie by AirVPN)
     #[allow(unused_must_use)]
     pub fn build(&self) -> String {
-        let mut s = String::new();
-        writeln!(&mut s, "# {}\n", &time());
-        writeln!(&mut s, "{}", &self.build_options());
-        writeln!(&mut s, "{}", &self.build_scrub());
-        writeln!(&mut s, "{}", &self.build_incoming());
-        writeln!(&mut s, "{}", &self.build_outgoing());
-        writeln!(&mut s, "{}", &self.build_antispoofing());
-        writeln!(&mut s, "{}", &self.build_blocklist());
-        writeln!(&mut s, "{}", &self.build_interfaces());
-        writeln!(&mut s, "{}", &self.build_owners());
-        writeln!(&mut s, "{}", &self.build_ipv6());
-        writeln!(&mut s, "{}", &self.build_lan());
-        writeln!(&mut s, "{}", &self.build_icmp());
-        write!(&mut s, "{}", &self.build_destinations());
-        s
+        let mut rules = Vec::new();
+        self.write(&mut rules);
+        String::from_utf8(rules).expect("Rules.write() invalid utf-8")
     }
 
-    #[allow(unused_must_use)]
-    fn build_macros(
-        &self,
-        prefix: &str,
-        interfaces: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> (String, Vec<String>) {
-        let mut s = String::new();
-        let mut macros = vec![];
-        for (idx, interface) in interfaces.into_iter().enumerate() {
-            let macro_var = &format!("{}{}_if", prefix, &idx);
-            writeln!(&mut s, "{} = \"{}\"", macro_var, interface.as_ref());
-            macros.push(format!("${}", macro_var));
-        }
-        (s, macros)
+    pub fn write(&self, mut to: impl IoWrite) -> IoResult<()> {
+        self.write_header(&mut to)?;
+        self.write_options(&mut to)?;
+        self.write_scrub(&mut to)?;
+        self.write_incoming(&mut to)?;
+        self.write_outgoing(&mut to)?;
+        self.write_antispoofing(&mut to)?;
+        self.write_blocklist(&mut to)?;
+        self.write_interfaces(&mut to)?;
+        self.write_owners(&mut to)?;
+        self.write_ipv6(&mut to)?;
+        self.write_lan(&mut to)?;
+        self.write_icmp(&mut to)?;
+        self.write_destinations(&mut to)?;
+        Ok(())
     }
 
-    fn build_table(
-        &self,
-        table_name: &str,
-        destinations: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> String {
-        let mut addresses = vec![];
-        let mut files = vec![];
-        for destination in destinations {
-            let destination = destination.as_ref();
-            if destination.starts_with('/') {
-                files.push(format!("file \"{}\"", destination));
-            } else {
-                addresses.push(destination.to_string());
-            }
-        }
-        format!(
-            "table <{}> {{ {} }} {}\n",
-            table_name,
-            addresses.join(", "),
-            files.join(" "),
-        )
+    pub fn write_header(&self, mut to: impl IoWrite) -> IoResult<()> {
+        writeln!(&mut to, "# HEADER")?;
+        writeln!(&mut to, "# {}", &time())?;
+        writeln!(&mut to)
     }
 
-    #[allow(unused_must_use)]
-    pub fn build_options(&self) -> String {
-        let mut s = String::new();
-        writeln!(&mut s, "# OPTIONS");
-        writeln!(&mut s, "set block-policy {}", &self.block_policy);
-        writeln!(&mut s, "set state-policy {}", &self.state_policy);
+    pub fn write_options(&self, mut to: impl IoWrite) -> IoResult<()> {
+        writeln!(&mut to, "# OPTIONS")?;
+        writeln!(&mut to, "set block-policy {}", &self.block_policy)?;
+        writeln!(&mut to, "set state-policy {}", &self.state_policy)?;
         if !self.skip_interfaces.is_empty() {
-            let (macros, interfaces) = self.build_macros("skip", &self.skip_interfaces);
-            write!(&mut s, "{}", &macros);
-            writeln!(&mut s, "set skip on {{ {} }}", &interfaces.join(", "));
+            let interfaces = self.write_macros(&mut to, "skip", &self.skip_interfaces)?;
+            writeln!(&mut to, "set skip on {{ {} }}", &interfaces.join(", "))?;
         }
-        s
+        writeln!(&mut to)
     }
 
-    #[allow(unused_must_use)]
-    pub fn build_scrub(&self) -> String {
-        let mut s = String::new();
-        writeln!(&mut s, "# SCRUB");
-        writeln!(&mut s, "scrub in all");
+    pub fn write_scrub(&self, mut to: impl IoWrite) -> IoResult<()> {
+        writeln!(&mut to, "# SCRUB")?;
+        writeln!(&mut to, "scrub in all")?;
         if self.min_ttl > 0 {
-            writeln!(&mut s, "scrub out all min-ttl {}", self.min_ttl);
+            writeln!(&mut to, "scrub out all min-ttl {}", self.min_ttl)?;
         }
-        s
+        writeln!(&mut to)
     }
 
-    #[allow(unused_must_use)]
-    pub fn build_incoming(&self) -> String {
-        let mut s = String::new();
-        writeln!(&mut s, "# INCOMING");
+    pub fn write_incoming(&self, mut to: impl IoWrite) -> IoResult<()> {
+        writeln!(&mut to, "# INCOMING")?;
         match self.incoming {
             Action::Block => {
                 writeln!(
-                    &mut s,
+                    &mut to,
                     "block {} in {} all",
                     &self.block_policy,
                     self.get_log()
-                );
+                )?;
             }
             Action::Pass => {
-                writeln!(&mut s, "pass in all");
+                writeln!(&mut to, "pass in all")?;
             }
         }
-        s
+        writeln!(&mut to)
     }
 
-    #[allow(unused_must_use)]
-    pub fn build_outgoing(&self) -> String {
-        let mut s = String::new();
-        writeln!(&mut s, "# OUTGOING");
+    pub fn write_outgoing(&self, mut to: impl IoWrite) -> IoResult<()> {
+        writeln!(&mut to, "# OUTGOING")?;
         match self.outgoing {
             Action::Block => {
-                writeln!(&mut s, "block return out {} all", self.get_log());
+                writeln!(&mut to, "block return out {} all", self.get_log())?;
             }
             Action::Pass => {
-                writeln!(&mut s, "pass out all");
+                writeln!(&mut to, "pass out all")?;
             }
         }
-        s
+        writeln!(&mut to)
     }
 
-    #[allow(unused_must_use)]
-    pub fn build_antispoofing(&self) -> String {
-        let mut s = String::new();
-        writeln!(&mut s, "# ANTISPOOFING");
+    pub fn write_antispoofing(&self, mut to: impl IoWrite) -> IoResult<()> {
+        writeln!(&mut to, "# ANTISPOOFING")?;
         if let Some(antispoofing) = &self.antispoofing {
             writeln!(
-                &mut s,
+                &mut to,
                 "block drop in {} quick from {} to any label \"ANTISPOOFING\"",
                 self.get_log(),
                 antispoofing,
-            );
+            )?;
         }
-        s
+        writeln!(&mut to)
     }
 
-    #[allow(unused_must_use)]
-    pub fn build_blocklist(&self) -> String {
-        let mut s = String::new();
-        writeln!(&mut s, "# BLOCKLIST");
-        write!(
-            &mut s,
-            "{}",
-            &self.build_table(&self.block_table_name, &self.block_destinations),
-        );
+    pub fn write_blocklist(&self, mut to: impl IoWrite) -> IoResult<()> {
+        writeln!(&mut to, "# BLOCKLIST")?;
+        self.write_table(&mut to, &self.block_table_name, &self.block_destinations)?;
         writeln!(
-            &mut s,
+            &mut to,
             "block drop in quick from <{}> to any label \"BLOCKLIST_IN\"",
             &self.block_table_name,
-        );
+        )?;
         writeln!(
-            &mut s,
+            &mut to,
             "block return out quick from any to <{}> label \"BLOCKLIST_OUT\"",
             &self.block_table_name,
-        );
-        s
+        )?;
+        writeln!(&mut to)
     }
 
-    #[allow(unused_must_use)]
-    pub fn build_interfaces(&self) -> String {
-        let mut s = String::new();
-        writeln!(&mut s, "# INTERFACES");
+    pub fn write_interfaces(&self, mut to: impl IoWrite) -> IoResult<()> {
+        writeln!(&mut to, "# INTERFACES")?;
         let mut in_interfaces = vec![];
         let mut out_interfaces = vec![];
         for direct_interface in &self.pass_interfaces {
@@ -1033,31 +986,27 @@ impl<'a> Rules {
                 out_interfaces.push(interface);
             }
         }
-        let (in_macros, in_interfaces) = self.build_macros("pass_in", &in_interfaces);
-        let (out_macros, out_interfaces) = self.build_macros("pass_out", &out_interfaces);
+        let in_interfaces = self.write_macros(&mut to, "pass_in", &in_interfaces)?;
+        let out_interfaces = self.write_macros(&mut to, "pass_out", &out_interfaces)?;
         if !in_interfaces.is_empty() {
-            write!(&mut s, "{}", &in_macros);
             writeln!(
-                &mut s,
+                &mut to,
                 "pass in quick on {{ {} }} all",
                 &in_interfaces.join(", "),
-            );
+            )?;
         }
         if !out_interfaces.is_empty() {
-            write!(&mut s, "{}", &out_macros);
             writeln!(
-                &mut s,
+                &mut to,
                 "pass out quick on {{ {} }} all",
                 &out_interfaces.join(", "),
-            );
+            )?;
         }
-        s
+        writeln!(&mut to)
     }
 
-    #[allow(unused_must_use)]
-    pub fn build_owners(&self) -> String {
-        let mut s = String::new();
-        writeln!(&mut s, "# OWNERS");
+    pub fn write_owners(&self, mut to: impl IoWrite) -> IoResult<()> {
+        writeln!(&mut to, "# OWNERS")?;
         let mut users = vec![];
         let mut groups = vec![];
         for owner in &self.pass_owners {
@@ -1069,29 +1018,25 @@ impl<'a> Rules {
             .push(owner.safe_unwrap());
         }
         if !users.is_empty() {
-            writeln!(&mut s, "pass quick all user {{ {} }}", &users.join(", "));
+            writeln!(&mut to, "pass quick all user {{ {} }}", &users.join(", "))?;
         }
         if !groups.is_empty() {
-            writeln!(&mut s, "pass quick all group {{ {} }}", &groups.join(", "));
+            writeln!(&mut to, "pass quick all group {{ {} }}", &groups.join(", "))?;
         }
-        s
+        writeln!(&mut to)
     }
 
-    #[allow(unused_must_use)]
-    pub fn build_ipv6(&self) -> String {
-        let mut s = String::new();
-        writeln!(&mut s, "# IPV6");
+    pub fn write_ipv6(&self, mut to: impl IoWrite) -> IoResult<()> {
+        writeln!(&mut to, "# IPV6")?;
         if self.is_block_ipv6 {
-            writeln!(&mut s, "block {} in quick inet6 all", &self.block_policy);
-            writeln!(&mut s, "block return out quick inet6 all");
+            writeln!(&mut to, "block {} in quick inet6 all", &self.block_policy)?;
+            writeln!(&mut to, "block return out quick inet6 all")?;
         }
-        s
+        writeln!(&mut to)
     }
 
-    #[allow(unused_must_use)]
-    pub fn build_lan(&self) -> String {
-        let mut s = String::new();
-        writeln!(&mut s, "# LAN");
+    pub fn write_lan(&self, mut to: impl IoWrite) -> IoResult<()> {
+        writeln!(&mut to, "# LAN")?;
         if let Some(lan) = &self.lan {
             let ipv4nrm = gvars::IPV4_NOT_ROUTABLE_MULTICASTS.join(", ");
             let ipv6nrm = gvars::IPV6_NOT_ROUTABLE_MULTICASTS.join(", ");
@@ -1100,96 +1045,93 @@ impl<'a> Rules {
                 Multicast::All => (gvars::IPV4_MULTICAST, gvars::IPV6_MULTICAST),
             };
             if lan.is_block_out_dns {
-                let mut block_out_dns = |addrs: &[&str]| {
+                let mut block_out_dns = |addrs: &[&str]| -> IoResult<()> {
                     for &addr in addrs {
                         writeln!(
-                            &mut s,
+                            &mut to,
                             "block return out quick {} proto {{ tcp, udp }} from {} to {} port domain",
                             if addr.contains(':') { "inet6" } else { "inet" }, addr, addr,
-                        );
+                        )?;
                     }
+                    Ok(())
                 };
-                block_out_dns(&gvars::IPV4_PRIVATE_NETWORKS);
+                block_out_dns(&gvars::IPV4_PRIVATE_NETWORKS)?;
                 if !self.is_block_ipv6 {
-                    block_out_dns(&gvars::IPV6_PRIVATE_NETWORKS);
+                    block_out_dns(&gvars::IPV6_PRIVATE_NETWORKS)?;
                 }
             }
             for addr in &gvars::IPV4_PRIVATE_NETWORKS {
                 writeln!(
-                    &mut s,
+                    &mut to,
                     "pass quick inet from {} to {{ {}, {}, {} }}",
                     addr,
                     addr,
                     &Ipv4Addr::BROADCAST,
                     ipv4m,
-                );
+                )?;
             }
             writeln!(
-                &mut s,
+                &mut to,
                 "pass quick inet from {} to {{ {}, {} }}",
                 &Ipv4Addr::UNSPECIFIED,
                 &Ipv4Addr::BROADCAST,
                 &ipv4nrm,
-            );
+            )?;
             if !self.is_block_ipv6 {
                 for addr in &gvars::IPV6_PRIVATE_NETWORKS {
                     writeln!(
-                        &mut s,
+                        &mut to,
                         "pass quick inet6 from {} to {{ {}, {} }}",
                         addr, addr, ipv6m,
-                    );
+                    )?;
                 }
                 writeln!(
-                    &mut s,
+                    &mut to,
                     "pass quick inet6 from {} to {{ {} }}",
                     &Ipv6Addr::UNSPECIFIED,
                     &ipv6nrm,
-                );
+                )?;
             }
         }
-        s
+        writeln!(&mut to)
     }
 
-    #[allow(unused_must_use)]
-    pub fn build_icmp(&self) -> String {
-        let mut s = String::new();
-        writeln!(&mut s, "# ICMP");
+    pub fn write_icmp(&self, mut to: impl IoWrite) -> IoResult<()> {
+        writeln!(&mut to, "# ICMP")?;
         match self.icmp {
             Some(ICMP::Echoreq) => {
                 let mut pass_icmp = |af: &str, proto: &str, type_prefix: &str, label: &str| {
                     writeln!(
-                        &mut s,
+                        &mut to,
                         "pass quick {} proto {} all {} echoreq label \"{}\"",
                         af, proto, type_prefix, label,
-                    );
+                    )
                 };
-                pass_icmp("inet", "icmp", "icmp-type", "ICMP");
+                pass_icmp("inet", "icmp", "icmp-type", "ICMP")?;
                 if !self.is_block_ipv6 {
-                    pass_icmp("inet6", "icmp6", "icmp6-type", "ICMP6");
+                    pass_icmp("inet6", "icmp6", "icmp6-type", "ICMP6")?;
                 }
             }
             Some(ICMP::All) => {
                 let mut pass_icmp = |af: &str, proto: &str, label: &str| {
                     writeln!(
-                        &mut s,
+                        &mut to,
                         "pass quick {} proto {} all label \"{}\"",
                         af, proto, label,
-                    );
+                    )
                 };
-                pass_icmp("inet", "icmp", "ICMP");
+                pass_icmp("inet", "icmp", "ICMP")?;
                 if !self.is_block_ipv6 {
-                    pass_icmp("inet6", "icmp6", "ICMP6");
+                    pass_icmp("inet6", "icmp6", "ICMP6")?;
                 }
             }
             _ => {}
         }
-        s
+        writeln!(&mut to)
     }
 
-    #[allow(unused_must_use)]
-    pub fn build_destinations(&self) -> String {
-        let mut s = String::new();
-        writeln!(&mut s, "# DESTINATIONS");
+    pub fn write_destinations(&self, mut to: impl IoWrite) -> IoResult<()> {
+        writeln!(&mut to, "# DESTINATIONS")?;
         let mut in_destinations = vec![];
         let mut out_destinations = vec![];
         for direct_destination in &self.pass_destinations {
@@ -1203,27 +1145,60 @@ impl<'a> Rules {
                 out_destinations.push(destination);
             }
         }
-        write!(
-            &mut s,
-            "{}",
-            &self.build_table(&self.in_table_name, &in_destinations),
-        );
-        write!(
-            &mut s,
-            "{}",
-            &self.build_table(&self.out_table_name, &out_destinations),
-        );
+        self.write_table(&mut to, &self.in_table_name, &in_destinations)?;
+        self.write_table(&mut to, &self.out_table_name, &out_destinations)?;
         writeln!(
-            &mut s,
+            &mut to,
             "pass in quick from <{}> to any",
             &self.in_table_name,
-        );
+        )?;
         writeln!(
-            &mut s,
+            &mut to,
             "pass out quick from any to <{}>",
             &self.out_table_name,
-        );
-        s
+        )?;
+        writeln!(&mut to)
+    }
+
+    fn write_macros(
+        &self,
+        mut to: impl IoWrite,
+        prefix: &str,
+        interfaces: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> IoResult<Vec<String>> {
+        let mut macros = vec![];
+        for (idx, interface) in interfaces.into_iter().enumerate() {
+            let macro_var = &format!("{}{}_if", prefix, &idx);
+            writeln!(&mut to, "{} = \"{}\"", macro_var, interface.as_ref())?;
+            macros.push(format!("${}", macro_var));
+        }
+        Ok(macros)
+    }
+
+    fn write_table(
+        &self,
+        mut to: impl IoWrite,
+        table_name: &str,
+        destinations: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> IoResult<()> {
+        let mut addresses = vec![];
+        let mut files = vec![];
+        for destination in destinations {
+            let destination = destination.as_ref();
+            if destination.starts_with('/') {
+                files.push(format!("file \"{}\"", destination));
+            } else {
+                addresses.push(destination.to_string());
+            }
+        }
+        writeln!(
+            &mut to,
+            "table <{}> {{ {} }} {}",
+            table_name,
+            addresses.join(", "),
+            files.join(" "),
+        )?;
+        Ok(())
     }
 
     fn get_log(&self) -> &str {
