@@ -1,6 +1,6 @@
 # netlock
 
-Network lock (killswitch) for macOS. Uses pf firewall.
+Network lock (vpn killswitch) for macOS. Uses pf firewall.
 
 Based on [Eddie by AirVPN](https://github.com/AirVPN/Eddie).
 
