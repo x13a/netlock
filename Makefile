@@ -1,10 +1,10 @@
-prefix ?= /usr/local
+NAME        := netlock
+
+prefix      ?= /usr/local
 exec_prefix ?= $(prefix)
-sbindir ?= $(exec_prefix)/sbin
-NAME := netlock
-ADMINUID := 501
-destdir := $(DESTDIR)$(sbindir)
-dest := $(destdir)/$(NAME)
+sbindir     ?= $(exec_prefix)/sbin
+
+sbindestdir := $(DESTDIR)$(sbindir)
 
 all: build
 
@@ -18,14 +18,13 @@ cargo-uninstall:
 	cargo uninstall --locked $(NAME)
 
 installdirs:
-	install -o $(ADMINUID) -g staff -d $(destdir)/
+	install -d $(sbindestdir)/
 
 install: installdirs
-	install -o root -g wheel -f uchg ./target/release/$(NAME) $(destdir)/
+	install ./target/release/$(NAME) $(sbindestdir)/
 
 uninstall:
-	chflags nouchg $(dest)
-	rm -f $(dest)
+	rm -f $(sbindestdir)/$(NAME)
 
 clean:
 	cargo clean
