@@ -11,8 +11,8 @@ $ sudo make install
 ```
 or
 ```sh
-$ brew tap x31a/tap https://bitbucket.org/x31a/homebrew-tap.git
-$ brew install x31a/tap/netlock
+$ brew tap x13a/tap
+$ brew install x13a/tap/netlock
 ```
 
 ## Usage
@@ -94,9 +94,7 @@ $ sudo netlock -Sv
 
 ## Caveats
 
-When enabled local dns queries will be blocked. For your safety, as macOS 
-has no built-in dns encryption, use 
-[dnscrypt-proxy](https://github.com/DNSCrypt/dnscrypt-proxy).
+When enabled, local network dns queries will be blocked.
 
 ## Friends
 - [killswitch](https://github.com/vpn-kill-switch/killswitch)
