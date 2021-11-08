@@ -2,8 +2,6 @@
 
 Network lock (vpn killswitch) for macOS. Uses pf firewall.
 
-Based on [Eddie by AirVPN](https://github.com/AirVPN/Eddie).
-
 ## Installation
 ```sh
 $ make
